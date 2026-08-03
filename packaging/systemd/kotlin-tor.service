@@ -1,0 +1,27 @@
+# kotlin-tor — systemd user/system unit (C Tor service analogue)
+[Unit]
+Description=kotlin-tor Tor client/relay (pure Kotlin)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env java -jar /usr/local/lib/kotlin-tor/cli.jar -f /etc/kotlin-tor/torrc
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+# Hardening (subset of tor@.service recommendations)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kotlin-tor
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

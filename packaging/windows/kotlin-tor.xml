@@ -1,0 +1,14 @@
+<service>
+  <id>kotlin-tor</id>
+  <name>kotlin-tor Tor client/relay</name>
+  <description>Pure-Kotlin Tor implementation (kotlin-tor)</description>
+  <executable>%JAVA_HOME%\bin\java.exe</executable>
+  <arguments>-jar "C:\Program Files\kotlin-tor\cli.jar" -f "C:\ProgramData\kotlin-tor\torrc"</arguments>
+  <logpath>C:\ProgramData\kotlin-tor\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  <onfailure action="restart" delay="10 sec"/>
+  <stoptimeout>15 sec</stoptimeout>
+</service>
