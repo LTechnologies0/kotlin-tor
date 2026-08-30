@@ -5,13 +5,14 @@ import org.junit.jupiter.api.Test
 
 class ChannelSchedulerTest {
     @Test
-    fun `parse and select prefer KIST`() {
+    fun `parse and select prefer KIST_LITE over full KIST by default`() {
         val list = ChannelScheduler.parseList("KIST,KISTLite,Vanilla")
         assertEquals(
             listOf(SchedulerType.KIST, SchedulerType.KIST_LITE, SchedulerType.VANILLA),
             list,
         )
-        assertEquals(SchedulerType.KIST, ChannelScheduler.select(list))
+        // Full KIST requires KOTLIN_TOR_KIST_PYTHON=1; otherwise skip to KIST_LITE.
+        assertEquals(SchedulerType.KIST_LITE, ChannelScheduler.select(list))
     }
 
     @Test

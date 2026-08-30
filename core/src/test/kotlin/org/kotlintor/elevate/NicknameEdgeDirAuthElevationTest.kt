@@ -32,7 +32,9 @@ class NicknameEdgeDirAuthElevationTest {
         val d = Describe.node("Guard1", "AA".repeat(20), "1.2.3.4", 9001)
         assertTrue(d.startsWith("\$"))
         assertTrue(d.contains("~Guard1"))
-        assertTrue(d.contains("1.2.3.4:9001"))
+        // C Tor format_node_description: " at <addr>" without ORPort
+        assertTrue(d.contains(" at 1.2.3.4"))
+        assertFalse(d.contains(":9001"))
     }
 
     @Test

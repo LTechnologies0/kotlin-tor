@@ -243,4 +243,71 @@ object NtorV3 {
     /** CC_FIELD_REQUEST extension (type 1, empty body) wrapped as N_EXTENSIONS message. */
     fun congestionControlRequest(): ByteArray =
         byteArrayOf(1, 1, 0) // one extension: type=1, len=0
+
+    // --- C Tor `onion_ntor_v3.h` op aliases (L3) ---
+
+    /** C Tor `onion_skin_ntor3_create` / `onion_ntor3_client_handshake` begin. */
+    fun onionSkinNtor3Create(
+        relay: PublicKey,
+        clientMessage: ByteArray = emptyExtensions(),
+        verification: ByteArray = CIRCUIT_VERIFICATION,
+        clientSk: ByteArray? = null,
+    ): Pair<ClientState, ByteArray> = clientBegin(relay, clientMessage, verification, clientSk)
+
+    /** C Tor `onion_skin_ntor3_create_nokeygen`. */
+    fun onionSkinNtor3CreateNokeygen(
+        relay: PublicKey,
+        clientSk: ByteArray,
+        clientMessage: ByteArray = emptyExtensions(),
+        verification: ByteArray = CIRCUIT_VERIFICATION,
+    ): Pair<ClientState, ByteArray> =
+        clientBegin(relay, clientMessage, verification, clientSk)
+
+    /** C Tor `onion_ntor3_client_handshake` finish. */
+    fun onionNtor3ClientHandshake(state: ClientState, serverHandshake: ByteArray): Result =
+        clientFinish(state, serverHandshake)
+
+    /** C Tor `onion_skin_ntor3_server_handshake_part1` / part2 combined. */
+    fun onionSkinNtor3ServerHandshakePart1(
+        id: ByteArray,
+        onionSk: ByteArray,
+        onionPk: ByteArray,
+        clientHandshake: ByteArray,
+        serverMessage: ByteArray = emptyExtensions(),
+    ): ServerReply = serverRespond(id, onionSk, onionPk, clientHandshake, serverMessage)
+
+    fun onionSkinNtor3ServerHandshakePart2(
+        id: ByteArray,
+        onionSk: ByteArray,
+        onionPk: ByteArray,
+        clientHandshake: ByteArray,
+        serverMessage: ByteArray = emptyExtensions(),
+    ): ServerReply = onionSkinNtor3ServerHandshakePart1(id, onionSk, onionPk, clientHandshake, serverMessage)
+
+    /** C Tor `onion_skin_ntor3_server_handshake_part2_nokeygen`. */
+    fun onionSkinNtor3ServerHandshakePart2Nokeygen(
+        id: ByteArray,
+        onionSk: ByteArray,
+        onionPk: ByteArray,
+        clientHandshake: ByteArray,
+        serverYSk: ByteArray,
+        serverMessage: ByteArray = emptyExtensions(),
+    ): ServerReply =
+        serverRespond(id, onionSk, onionPk, clientHandshake, serverMessage, serverYSk = serverYSk)
+
+    /** C Tor `ntor3_handshake_state_free_`. */
+    fun ntor3HandshakeStateFree(state: ClientState) {
+        state.clientSk.fill(0)
+        state.clientPk.fill(0)
+        state.bx.fill(0)
+        state.msgMac.fill(0)
+        state.verification.fill(0)
+    }
+
+    /** C Tor `ntor3_server_handshake_state_free_` — wipe reply keystream. */
+    fun ntor3ServerHandshakeStateFree(reply: ServerReply) {
+        reply.keystream.fill(0)
+        reply.clientMessage.fill(0)
+        reply.handshake.fill(0)
+    }
 }

@@ -160,4 +160,63 @@ object Cgo {
             return material.copyOfRange(0, KLEN_UIV) to material.copyOfRange(KLEN_UIV, N1_LEN)
         }
     }
+
+    // --- C Tor `cgo.h` / `relay_crypto_cgo.c` op aliases (L3) ---
+
+    fun etInit(): ByteArray = ByteArray(KLEN_ET)
+    fun etSetKey(keys: ByteArray): ByteArray {
+        require(keys.size == KLEN_ET)
+        return keys.copyOf()
+    }
+    fun etClear(keys: ByteArray) = keys.fill(0)
+    fun etEncrypt(keys: ByteArray, tweak: ByteArray, block: ByteArray): ByteArray =
+        Et.encrypt(keys, tweak, block)
+    fun etDecrypt(keys: ByteArray, tweak: ByteArray, block: ByteArray): ByteArray =
+        Et.decrypt(keys, tweak, block)
+
+    fun prfInit(): ByteArray = ByteArray(KLEN_PRF)
+    fun prfSetKey(keys: ByteArray): ByteArray {
+        require(keys.size == KLEN_PRF)
+        return keys.copyOf()
+    }
+    fun prfClear(keys: ByteArray) = keys.fill(0)
+    fun prfXorT0(keys: ByteArray, tweak: ByteArray, buf: ByteArray) = Prf.xorN0(keys, tweak, buf)
+    fun prfGenT1(keys: ByteArray, tweak: ByteArray, n: Int = N1_LEN): ByteArray = Prf.n1(keys, tweak, n)
+
+    fun uivInit(): ByteArray = ByteArray(KLEN_UIV)
+    fun uivClear(keys: ByteArray) = keys.fill(0)
+    fun uivEncrypt(keys: ByteArray, h: ByteArray, cell: ByteArray): ByteArray =
+        Uiv.encrypt(keys, h, cell)
+    fun uivDecrypt(keys: ByteArray, h: ByteArray, cell: ByteArray): ByteArray =
+        Uiv.decrypt(keys, h, cell)
+    fun uivUpdate(keys: ByteArray, nonce: ByteArray): Pair<ByteArray, ByteArray> =
+        Uiv.update(keys, nonce)
+
+    fun keyMaterialLen(): Int = KLEN_UIV
+
+    fun cryptNew(seed: ByteArray): CgoHop = CgoHop.fromSeed(seed)
+
+    fun cryptClientOriginate(hop: CgoHop, cmd: Int, cell: ByteArray): ByteArray =
+        hop.clientOriginate(cmd, cell)
+
+    fun cryptClientForward(hop: CgoHop, cmd: Int, cell: ByteArray) {
+        hop.clientEncryptOutbound(cmd, cell)
+    }
+
+    fun cryptClientBackward(hop: CgoHop, cmd: Int, cell: ByteArray): ByteArray? =
+        hop.clientDecryptInbound(cmd, cell)
+
+    fun cryptRelayForward(hop: CgoHop, cmd: Int, cell: ByteArray): ByteArray? =
+        hop.relayDecryptOutbound(cmd, cell)
+
+    fun cryptRelayOriginate(hop: CgoHop, cmd: Int, cell: ByteArray): ByteArray =
+        hop.relayOriginate(cmd, cell)
+
+    fun cryptRelayBackward(hop: CgoHop, cmd: Int, cell: ByteArray) {
+        hop.relayEncryptInbound(cmd, cell)
+    }
+
+    fun cryptFree(hop: CgoHop) {
+        hop.snapshot().toList().forEach { it.fill(0) }
+    }
 }

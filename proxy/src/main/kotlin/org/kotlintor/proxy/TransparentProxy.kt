@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import org.kotlintor.TorClient
 import org.kotlintor.config.ListenSpec
@@ -25,17 +26,20 @@ import java.net.Socket
 class TransparentProxy(
     private val dialer: ExitDialer,
     private val scope: CoroutineScope,
+    private val maxConcurrent: Int = ProxyAcceptLimits.DEFAULT_TCP,
     private val originalDst: (Socket) -> Pair<String, Int>? = { LinuxOriginalDst.resolve(it) },
 ) {
     constructor(
         client: TorClient,
         scope: CoroutineScope,
+        maxConcurrent: Int = ProxyAcceptLimits.DEFAULT_TCP,
         originalDst: (Socket) -> Pair<String, Int>? = { LinuxOriginalDst.resolve(it) },
-    ) : this(TorClientDialer(client), scope, originalDst)
+    ) : this(TorClientDialer(client), scope, maxConcurrent, originalDst)
 
     private var job: Job? = null
     private var server: ServerSocket? = null
     private var listenerHandle: ListenerConnection? = null
+    private val gate: Semaphore = ProxyAcceptLimits.semaphore(maxConcurrent)
 
     fun start(listen: ListenSpec) {
         val ss = ServerSocket()
@@ -47,7 +51,17 @@ class TransparentProxy(
         job = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val sock = runCatching { ss.accept() }.getOrNull() ?: break
-                launch { handle(sock) }
+                if (!gate.tryAcquire()) {
+                    runCatching { sock.close() }
+                    continue
+                }
+                launch {
+                    try {
+                        handle(sock)
+                    } finally {
+                        gate.release()
+                    }
+                }
             }
         }
     }

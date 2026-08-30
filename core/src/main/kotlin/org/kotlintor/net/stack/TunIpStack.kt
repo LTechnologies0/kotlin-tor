@@ -33,6 +33,8 @@ class TunIpStack(
 
     suspend fun inject(packet: ByteArray) {
         val ip = Ipv4Packet.parse(packet) ?: return
+        // No fragment reassembly — drop MF/offset≠0 (UDP frag / overlapping-frag abuse).
+        if (ip.moreFragments || ip.fragmentOffset != 0) return
         when (ip.protocol) {
             Ipv4Packet.PROTO_ICMP -> handleIcmp(ip)
             Ipv4Packet.PROTO_UDP -> handleUdp(ip)
@@ -44,7 +46,8 @@ class TunIpStack(
 
     private suspend fun handleIcmp(ip: Ipv4Packet.Packet) {
         val echo = IcmpEcho.parse(ip.payload) ?: return
-        if (echo.type != IcmpEcho.TYPE_ECHO_REQUEST) return
+        // Only Echo Request → Reply. Ignore redirects, unreachable, etc. (ICMP abuse).
+        if (echo.type != IcmpEcho.TYPE_ECHO_REQUEST || echo.code != 0) return
         val reply = IcmpEcho.buildEchoReply(echo)
         val out = Ipv4Packet.build(
             src = ip.dst,

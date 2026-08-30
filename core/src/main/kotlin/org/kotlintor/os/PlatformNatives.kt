@@ -48,10 +48,13 @@ object PlatformNatives {
             soOriginalDst = true,
             tcpInfoKist = true,
             seccomp = true,
-            vpnProtect = false,
+            vpnProtect = true,
             winService = false,
             launchd = false,
-            notes = listOf("SO_ORIGINAL_DST via LinuxOriginalDst; KIST TCP_INFO; SeccompBpf"),
+            notes = listOf(
+                "SO_ORIGINAL_DST via LinuxOriginalDst; KIST TCP_INFO; SeccompBpf; " +
+                    "full-tunnel via LinuxTunDevice + SO_MARK protect (Tor uplink only)",
+            ),
         )
         OsFamily.ANDROID -> Caps(
             family = family,
@@ -155,46 +158,72 @@ object PlatformNatives {
     @Volatile
     var socketProtector: ((Int) -> Boolean)? = null
 
+    /**
+     * Prefer on Android: [android.net.VpnService.protect(java.net.Socket)] — avoids
+     * fragile FD reflection before connect (ART often has no usable FD yet).
+     */
+    @Volatile
+    var socketProtectorSocket: ((java.net.Socket) -> Boolean)? = null
+
+    /** Last protect failure detail (FD miss / SO_MARK / VpnService); cleared on success. */
+    @Volatile
+    var lastProtectFailure: String? = null
+
     fun protectSocketFd(fd: Int): Boolean = socketProtector?.invoke(fd) ?: false
+
+    /** True when any VPN protect hook is installed. */
+    fun hasSocketProtector(): Boolean =
+        socketProtectorSocket != null || socketProtector != null
 
     /**
      * Best-effort extract of the underlying OS FD from a [java.net.Socket]
      * (JDK `SocketImpl` / Android dual-stack sockets / NioSocketImpl).
+     *
+     * JDK 21 plain [java.net.Socket] uses [SocksSocketImpl] whose own `fd` stays null;
+     * the real FD lives on `delegate` ([sun.nio.ch.NioSocketImpl]). Requires
+     * `--add-opens java.base/java.net=ALL-UNNAMED` (+ `java.io` / `sun.nio.ch`).
      */
     fun socketFd(socket: java.net.Socket): Int? {
-        fun readFdField(obj: Any): Int? {
+        fun fdFromFileDescriptor(v: java.io.FileDescriptor): Int? =
+            runCatching {
+                val fdField = java.io.FileDescriptor::class.java
+                    .getDeclaredField("fd").also { it.isAccessible = true }
+                fdField.getInt(v).takeIf { it >= 0 }
+            }.getOrNull()
+
+        fun readFdField(obj: Any, depth: Int = 0): Int? {
+            if (depth > 6) return null
             var c: Class<*>? = obj.javaClass
             while (c != null) {
-                for (name in listOf("fd", "fileDescriptor")) {
-                    runCatching {
+                // `delegate` (SocksSocketImpl) / `sc` (SocketAdaptor) before bare `fd`
+                // so a null placeholder fd on the wrapper does not stop the walk.
+                for (name in listOf("delegate", "sc", "fd", "fileDescriptor", "socket", "channel")) {
+                    val found = runCatching {
                         val f = c!!.getDeclaredField(name).also { it.isAccessible = true }
                         val v = f.get(obj) ?: return@runCatching null
                         when (v) {
-                            is Int -> return v.takeIf { it >= 0 }
-                            is java.io.FileDescriptor -> {
-                                val fdField = java.io.FileDescriptor::class.java
-                                    .getDeclaredField("fd").also { it.isAccessible = true }
-                                return fdField.getInt(v).takeIf { it >= 0 }
-                            }
-                            else -> {
-                                // Nested FileDescriptor holder
-                                return readFdField(v)
-                            }
+                            is Int -> v.takeIf { it >= 0 }
+                            is java.io.FileDescriptor -> fdFromFileDescriptor(v)
+                            else -> readFdField(v, depth + 1)
                         }
-                    }
+                    }.getOrNull()
+                    if (found != null) return found
                 }
-                // getFileDescriptor() style
                 runCatching {
                     val m = c!!.getMethod("getFileDescriptor")
                     val fdObj = m.invoke(obj) ?: return@runCatching null
-                    return readFdField(fdObj)
-                }
+                    readFdField(fdObj, depth + 1)
+                }.getOrNull()?.let { return it }
+                runCatching {
+                    val m = c!!.methods.firstOrNull { it.name == "getFDVal" && it.parameterCount == 0 }
+                        ?: return@runCatching null
+                    (m.invoke(obj) as? Int)?.takeIf { it >= 0 }
+                }.getOrNull()?.let { return it }
                 c = c.superclass
             }
             return null
         }
         return try {
-            // Prefer public channel FD when available
             runCatching {
                 val ch = socket.channel
                 if (ch != null) {
@@ -203,8 +232,10 @@ object PlatformNatives {
                         val v = key.invoke(ch) as? Int
                         if (v != null && v >= 0) return@runCatching v
                     }
+                    readFdField(ch)
+                } else {
+                    null
                 }
-                null
             }.getOrNull() ?: run {
                 val impl = socket.javaClass.getDeclaredField("impl").also { it.isAccessible = true }.get(socket)
                     ?: return null
@@ -216,22 +247,22 @@ object PlatformNatives {
     }
 
     /**
-     * Protect [socket] from VPN capture when a [socketProtector] is installed.
-     * Returns true when protect succeeded; false if no protector or FD unavailable.
-     *
-     * When an FD cannot be extracted (rare on some JDKs before connect), still
-     * invokes [socketProtector] with `-1` so VPN hosts can observe the dial attempt
-     * and tests can assert protect was requested.
+     * Protect [socket] from VPN capture when a protector is installed.
+     * Prefers [socketProtectorSocket] (VpnService.protect(Socket)), then FD hook.
+     * Never treats a missing FD as success (NUL-004 / RET-002).
      */
     fun protectSocket(socket: java.net.Socket): Boolean {
+        socketProtectorSocket?.let { return it(socket) }
         val protector = socketProtector ?: return false
         val fd = socketFd(socket)
-        return if (fd != null) {
-            protector(fd)
-        } else {
-            // Dial still proceeds; host may protect via other means.
-            protector(-1)
-            false
+        if (fd == null) {
+            lastProtectFailure = "socketFd null"
+            return false
         }
+        if (fd < 0) {
+            lastProtectFailure = "socketFd=$fd"
+            return false
+        }
+        return protector(fd)
     }
 }

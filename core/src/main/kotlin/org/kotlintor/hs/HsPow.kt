@@ -4,10 +4,13 @@ import org.kotlintor.crypto.Digests
 import org.kotlintor.util.SecureRandomSource
 
 /**
- * Prop327 / onion-service Proof-of-Work lite (Equi-X not implemented).
+ * Descriptor `pow-params` scaffolding and C Tor `hs_pow_*` naming.
  *
- * Provides a Hashcash-style effort check against a seed for testing and
- * descriptor `pow-params` scaffolding until Equi-X is ported.
+ * Elevated [hsPowSolve] / [hsPowVerify] are prop327 Equi-X + Blake2b via [HsPowProp327].
+ * The SHA256 leading-zero solve/verify helpers are **not** C Tor Equi-X
+ * (kept only for descriptor-line / queue scaffolding).
+ *
+ * Inventory: `L1:feature/hs/hs_pow.c`
  */
 object HsPow {
     data class Challenge(val seed: ByteArray, val effort: Int)
@@ -17,7 +20,7 @@ object HsPow {
     fun challenge(effort: Int = 20): Challenge =
         Challenge(SecureRandomSource.nextBytes(32), effort)
 
-    /** Find a nonce such that SHA256(seed‖nonce) has [effort] leading zero bits. */
+    /** SHA256 leading-zero solver — **not** C Tor Equi-X; see [hsPowSolve]. */
     fun solve(challenge: Challenge, maxAttempts: Long = 1_000_000L): Solution? {
         val nonce = ByteArray(16)
         var attempts = 0L
@@ -55,4 +58,44 @@ object HsPow {
             .encodeToString(challenge.seed)
         return "pow-params v1 $b64 ${challenge.effort} $expirationEpoch"
     }
+
+    private val seedCache = java.util.concurrent.ConcurrentHashMap<String, Challenge>()
+    private val workQueue = java.util.concurrent.ConcurrentLinkedQueue<Challenge>()
+    @Volatile private var serviceStateAlive: Boolean = true
+
+    /** C Tor `hs_pow_solve` — prop327 Equi-X + Blake2b ([HsPowProp327.solve]). */
+    fun hsPowSolve(
+        blindedId: ByteArray,
+        seed: ByteArray,
+        effort: Int,
+        maxAttempts: Long = 50_000L,
+    ): HsPowProp327.Solution? =
+        HsPowProp327.solve(blindedId, seed, effort, maxAttempts)
+
+    /** C Tor `hs_pow_verify` — prop327 ([HsPowProp327.verifySolution]). */
+    fun hsPowVerify(
+        solution: HsPowProp327.Solution,
+        blindedId: ByteArray,
+        minEffort: Int = 1,
+    ): Boolean = HsPowProp327.verifySolution(solution, blindedId, minEffort)
+
+    /** C Tor `hs_pow_queue_work`. */
+    fun hsPowQueueWork(challenge: Challenge): Int {
+        workQueue.offer(challenge)
+        seedCache[challenge.seed.contentHashCode().toString()] = challenge
+        return workQueue.size
+    }
+
+    /** C Tor `hs_pow_remove_seed_from_cache`. */
+    fun hsPowRemoveSeedFromCache(seed: ByteArray): Boolean =
+        seedCache.remove(seed.contentHashCode().toString()) != null
+
+    /** C Tor `hs_pow_free_service_state`. */
+    fun hsPowFreeServiceState() {
+        workQueue.clear()
+        seedCache.clear()
+        serviceStateAlive = false
+    }
+
+    fun hsPowServiceStateAlive(): Boolean = serviceStateAlive
 }

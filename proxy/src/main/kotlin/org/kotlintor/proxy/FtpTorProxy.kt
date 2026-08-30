@@ -6,6 +6,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import org.kotlintor.TorClient
 import org.kotlintor.config.ListenSpec
@@ -33,6 +34,7 @@ class FtpTorProxy(
     private val remoteHost: String,
     private val remotePort: Int = 21,
     private val advertiseHost: String = "127.0.0.1",
+    private val maxConcurrent: Int = ProxyAcceptLimits.DEFAULT_TCP,
 ) {
     constructor(
         client: TorClient,
@@ -40,12 +42,14 @@ class FtpTorProxy(
         remoteHost: String,
         remotePort: Int = 21,
         advertiseHost: String = "127.0.0.1",
-    ) : this(TorClientDialer(client), scope, remoteHost, remotePort, advertiseHost)
+        maxConcurrent: Int = ProxyAcceptLimits.DEFAULT_TCP,
+    ) : this(TorClientDialer(client), scope, remoteHost, remotePort, advertiseHost, maxConcurrent)
 
     private var job: Job? = null
     private var server: ServerSocket? = null
     private var listenerHandle: ListenerConnection? = null
     private val reservedListens = ConcurrentHashMap<Int, ServerSocket>()
+    private val gate: Semaphore = ProxyAcceptLimits.semaphore(maxConcurrent)
 
     fun start(listen: ListenSpec) {
         val ss = ServerSocket()
@@ -57,7 +61,17 @@ class FtpTorProxy(
         job = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val sock = runCatching { ss.accept() }.getOrNull() ?: break
-                launch { handleControl(sock) }
+                if (!gate.tryAcquire()) {
+                    runCatching { sock.close() }
+                    continue
+                }
+                launch {
+                    try {
+                        handleControl(sock)
+                    } finally {
+                        gate.release()
+                    }
+                }
             }
         }
     }

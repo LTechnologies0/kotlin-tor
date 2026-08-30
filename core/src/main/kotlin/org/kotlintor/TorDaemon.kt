@@ -47,7 +47,10 @@ class TorDaemon(
     private val job = SupervisorJob(parent?.coroutineContext?.get(kotlinx.coroutines.Job))
     val scope = CoroutineScope(job + kotlinx.coroutines.Dispatchers.Default)
     private val started = AtomicBoolean(false)
-    private val _events = MutableSharedFlow<TorEvent>(extraBufferCapacity = 256)
+    private val _events = MutableSharedFlow<TorEvent>(
+        replay = 32,
+        extraBufferCapacity = 256,
+    )
     val events: SharedFlow<TorEvent> = _events.asSharedFlow()
 
     val pluggableTransports = PtManager(config)
@@ -87,6 +90,12 @@ class TorDaemon(
         if (read > 0) bytesRead.addAndGet(read)
         if (written > 0) bytesWritten.addAndGet(written)
     }
+
+    fun bytesRead(): Long = bytesRead.get()
+
+    fun bytesWritten(): Long = bytesWritten.get()
+
+    fun openCircuitCount(): Int = client.circuitStatusLines().size
 
     fun confValue(key: String): String? {
         runtimeOverrides[key.uppercase()]?.let { return it }
@@ -155,12 +164,25 @@ class TorDaemon(
             Files.write(controlCookiePath, cookie)
         }
         if (config.disableNetwork) {
+            org.kotlintor.status.NetStatus.options = org.kotlintor.status.NetStatus.Options(
+                disableNetwork = true,
+                dormantOnFirstStartup = config.runtime.dormantOnFirstStartup,
+                dormantCanceledByStartup = config.runtime.dormantCanceledByStartup,
+                dormantTimeoutEnabled = config.runtime.dormantTimeoutEnabled,
+            )
             emit(TorEvent.Notice("DisableNetwork=1: skipping directory bootstrap and OR dials"))
             startOwningControllerWatch()
             emit(TorEvent.Notice("kotlin-tor daemon ready (network disabled)"))
             return
         }
-        emit(TorEvent.Bootstrap(client.bootstrapTracker.statusLine))
+        org.kotlintor.status.NetStatus.options = org.kotlintor.status.NetStatus.Options(
+            disableNetwork = false,
+            dormantOnFirstStartup = config.runtime.dormantOnFirstStartup,
+            dormantCanceledByStartup = config.runtime.dormantCanceledByStartup,
+            dormantTimeoutEnabled = config.runtime.dormantTimeoutEnabled,
+        )
+        org.kotlintor.status.NetStatus.noteUserActivity()
+        client.bootstrapTracker.notifyCurrent("Starting")
         if (config.useBridges) {
             pluggableTransports.start()
             val warnings = pluggableTransports.validateConfiguredBridges()
@@ -172,7 +194,6 @@ class TorDaemon(
             if (!client.isBootstrapped) throw e
             emit(TorEvent.Warn("circuit bootstrap failed: ${e.message}"))
         }
-        emit(TorEvent.Bootstrap(client.bootstrapTracker.statusLine))
         wireOnionServiceManager()
         if (config.hiddenServices.isNotEmpty()) {
             onionServices.startAll()

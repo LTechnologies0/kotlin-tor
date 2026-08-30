@@ -138,7 +138,8 @@ object CircuitExtensions {
 
     fun decodeSubprotoRequest(body: ByteArray): List<ProtoReq> {
         if (body.isEmpty()) return emptyList()
-        // Legacy ASCII (pre-fix): "Name=Ver\0Name=Ver"
+        // Wire format is binary only (tor-spec / prop346): protocol_id || cap_number.
+        // ASCII "Name=Ver" is accepted only for older unit fixtures — never encode ASCII.
         if (body.any { it == '='.code.toByte() }) {
             return body.toString(Charsets.US_ASCII).split('\u0000').mapNotNull { part ->
                 val t = part.trim()
@@ -148,7 +149,6 @@ object CircuitExtensions {
                 ProtoReq(name, ver)
             }
         }
-        // Binary (tor-spec / prop346): protocol_id || cap_number pairs
         if (body.size % 2 != 0) return emptyList()
         val out = ArrayList<ProtoReq>(body.size / 2)
         var i = 0

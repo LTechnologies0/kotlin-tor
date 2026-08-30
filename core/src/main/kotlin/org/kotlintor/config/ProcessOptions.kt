@@ -1,6 +1,7 @@
 package org.kotlintor.config
 
 import java.nio.file.Path
+import org.kotlintor.util.writeTextCompat
 
 /**
  * Process / misc torrc options (C Tor `or_options_t` process + client prefs subset).
@@ -94,7 +95,7 @@ object PidFile {
     fun write(path: Path?) {
         if (path == null) return
         java.nio.file.Files.createDirectories(path.parent ?: return)
-        java.nio.file.Files.writeString(path, ProcessHandle.current().pid().toString() + "\n")
+        path.writeTextCompat(ProcessHandle.current().pid().toString() + "\n")
     }
 
     fun delete(path: Path?) {

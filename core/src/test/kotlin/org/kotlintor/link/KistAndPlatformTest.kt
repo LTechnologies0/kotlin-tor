@@ -8,6 +8,27 @@ import org.kotlintor.os.PlatformNatives
 
 class KistAndPlatformTest {
     @Test
+    fun `KIST missing TCP_INFO cwnd zero is unlimited`() {
+        val lim = KistMath.computeLimit(
+            KistMath.SocketInfo(cwnd = 0, unacked = 0, mss = 1460, notSent = 0, outbufLen = 514),
+        )
+        assertEquals(Long.MAX_VALUE, lim)
+    }
+
+    @Test
+    fun `ChannelScheduler skips full KIST unless python probe opted in`() {
+        val selected = ChannelScheduler.select(
+            listOf(SchedulerType.KIST, SchedulerType.VANILLA),
+        )
+        if (LinuxTcpInfo.isFullKistEnabled()) {
+            assertEquals(SchedulerType.KIST, selected)
+        } else {
+            // Default: do not pick KIST merely because python3 exists.
+            assertEquals(SchedulerType.VANILLA, selected)
+        }
+    }
+
+    @Test
     fun `KIST limit matches cwnd formula`() {
         val lim = KistMath.computeLimit(
             KistMath.SocketInfo(cwnd = 10, unacked = 2, mss = 1000, notSent = 0, outbufLen = 0),

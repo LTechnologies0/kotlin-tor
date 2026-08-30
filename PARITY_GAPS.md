@@ -1,6 +1,6 @@
 # kotlin-tor ↔ C Tor parity gap map (feature board)
 
-Status: **0.1.0-SNAPSHOT** — functional client + partial relay/HS. Not anonymity-audited.  
+Status: **0.1.1** — functional client + partial relay/HS. Not anonymity-audited.  
 Goal: pure-Kotlin rewrite of C Tor (no `libtor.so` / Arti JNI). BouncyCastle OK.
 
 ## READ THIS FIRST
@@ -16,7 +16,8 @@ Goal: pure-Kotlin rewrite of C Tor (no `libtor.so` / Arti JNI). BouncyCastle OK.
 **Inventory snapshot** (regenerate with `python3 scripts/ctor_inventory_scan.py`):
 
 - ~379 Layer-1 `.c` rows · ~126 types · ~1600 ops · ~227 options
-- Depth reality: **D0=0**, **D1≈0**, **majority D2 (~2115+)**, **only ~11 D3** — not “almost done”
+- Depth reality: **D0=0**, **D1≈0**, **D2≈1043**, **D3≈1090**, **N/A≈203** — not “almost done”
+- Human checklist of every open unit: [`docs/CTOR_PARITY_TODO.md`](docs/CTOR_PARITY_TODO.md)
 - Dozens of Kotlin files self-label `lite`; full KIST + full WTF-PAD machines are **not ported**
 
 **Rule:** A row below may be ✅ only if linked master-inventory units are ≥ `D3`.  

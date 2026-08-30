@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# kotlin-tor desktop demo — works under sudo (Gradle's JAVA_HOME is usually stripped).
+#
+# Build once:
+#   ./gradlew :demo-desktop:createDistributable -Pkotlin.tor.extras=true
+# Run with privileges for full-tunnel VPN:
+#   sudo ./bin/kotlin-tor-demo
+# Or without:
+#   ./bin/kotlin-tor-demo
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP="$ROOT/demo-desktop/build/compose/binaries/main/app/kotlin-tor-demo"
+BIN="$APP/bin/kotlin-tor-demo"
+
+resolve_java_home() {
+  if [[ -n "${JAVA_HOME:-}" && -x "${JAVA_HOME}/bin/java" ]]; then
+    echo "$JAVA_HOME"
+    return
+  fi
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    local user_home
+    user_home="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+    for cand in \
+      "$user_home/.local/share/jdks/temurin-21" \
+      "$user_home/.sdkman/candidates/java/current" \
+      /usr/lib/jvm/java-21-openjdk \
+      /usr/lib/jvm/java-21 \
+      /usr/lib/jvm/temurin-21-jdk
+    do
+      if [[ -x "$cand/bin/java" ]]; then
+        echo "$cand"
+        return
+      fi
+    done
+  fi
+  for cand in \
+    "$HOME/.local/share/jdks/temurin-21" \
+    /usr/lib/jvm/java-21-openjdk \
+    /usr/lib/jvm/java-21 \
+    /usr/lib/jvm/temurin-21-jdk
+  do
+    if [[ -x "$cand/bin/java" ]]; then
+      echo "$cand"
+      return
+    fi
+  done
+  if command -v java >/dev/null 2>&1; then
+    local java_bin home
+    java_bin="$(command -v java)"
+    home="$(dirname "$(dirname "$(readlink -f "$java_bin" 2>/dev/null || echo "$java_bin")")")"
+    if [[ -x "$home/bin/java" ]]; then
+      echo "$home"
+      return
+    fi
+  fi
+  return 1
+}
+
+if [[ ! -x "$BIN" ]]; then
+  echo "Packaged app missing: $BIN" >&2
+  echo "Build with:" >&2
+  echo "  ./gradlew :demo-desktop:createDistributable -Pkotlin.tor.extras=true" >&2
+  exit 1
+fi
+
+JH="$(resolve_java_home)" || {
+  echo "Could not find JDK 21. Set JAVA_HOME then re-run (use: sudo -E ./bin/kotlin-tor-demo)." >&2
+  exit 1
+}
+
+export JAVA_HOME="$JH"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# Keep Tor data under the invoking user's cache (not inside the AppImage tree as root).
+if [[ -n "${SUDO_USER:-}" ]]; then
+  USER_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+  if [[ -n "$USER_HOME" ]]; then
+    export HOME="$USER_HOME"
+    export KOTLIN_TOR_DEMO_DATA="${KOTLIN_TOR_DEMO_DATA:-$USER_HOME/.cache/kotlin-tor-demo}"
+  fi
+fi
+
+# Do not cd into $APP — relative data dirs would land in the package tree.
+cd "$HOME"
+exec "$BIN" "$@"

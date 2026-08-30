@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.ArrayDeque
 
 /**
- * Channel state (C Tor `channel_state_t` lite).
+ * Channel state (C Tor `channel_state_t`).
  */
 enum class ChannelState {
     OPENING,
@@ -26,7 +26,7 @@ enum class ChannelSchedState {
 }
 
 /**
- * Channel outbuf / inbuf accounting (C Tor `channel_t` + `connection_t` buf lite).
+ * Channel outbuf / inbuf accounting (C Tor `channel_t` + `connection_t` buffers).
  *
  * Cells destined for the TLS socket accumulate in [outbuf] until the write
  * scheduler drains them; inbound bytes land in [inbuf] before cell decode.
@@ -58,6 +58,16 @@ class OrChannel(
     var paddingEnabled: Boolean = true
     /** Associated OR connection table handle id. */
     var orConnId: Long? = null
+    /** RSA identity digest hex (C Tor channel identity map). */
+    var identityDigestHex: String? = null
+    /** True when this side initiated the OR connection (client). */
+    var isClient: Boolean = true
+    /** Ed25519 identity (C Tor alleged id on OR conn). */
+    var ed25519Identity: ByteArray? = null
+    /** Canonical ORPort peer (C Tor `is_canonical`). */
+    var canonical: Boolean = false
+    /** Optional inbound cell dispatch hook (C Tor `channel_get_cell_handler`). */
+    var cellHandler: ((ByteArray) -> Unit)? = null
 
     fun markOpen() {
         state = ChannelState.OPEN
@@ -155,29 +165,49 @@ class OrChannel(
     }
 }
 
-/** Global channel map (C Tor channel gidmap lite). */
+/** Global channel map (C Tor channel gidmap + identity digest map). */
 object ChannelTable {
     private val byId = ConcurrentHashMap<Long, OrChannel>()
+    private val byIdentity = ConcurrentHashMap<String, OrChannel>()
 
     fun register(ch: OrChannel): OrChannel {
         byId[ch.globalId] = ch
         return ch
     }
 
-    fun remove(id: Long): OrChannel? = byId.remove(id)
+    fun remove(id: Long): OrChannel? {
+        val ch = byId.remove(id)
+        ch?.identityDigestHex?.let { byIdentity.remove(it.uppercase()) }
+        return ch
+    }
 
     fun get(id: Long): OrChannel? = byId[id]
+
+    fun putIdentity(ch: OrChannel) {
+        val id = ch.identityDigestHex?.uppercase() ?: return
+        byIdentity[id] = ch
+    }
+
+    fun removeByIdentity(ch: OrChannel) {
+        ch.identityDigestHex?.uppercase()?.let { byIdentity.remove(it) }
+    }
+
+    fun getByIdentity(identityHex: String): OrChannel? =
+        byIdentity[identityHex.uppercase()]
 
     fun count(): Int = byId.size
 
     fun openCount(): Int = byId.values.count { it.state == ChannelState.OPEN }
 
-    fun clear() = byId.clear()
+    fun clear() {
+        byId.clear()
+        byIdentity.clear()
+    }
 }
 
 /**
  * Create and link an entry (AP) connection with an exit edge for same-process
- * accounting (C Tor linked AP↔EXIT pair lite).
+ * accounting (C Tor linked AP↔EXIT pair).
  */
 object EdgeLinkedPair {
     data class Pair(

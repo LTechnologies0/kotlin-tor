@@ -9,26 +9,6 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * HS common helpers (C Tor `hs_common.c`).
- * Inventory: `L1:feature/hs/hs_common.c`
- */
-object HsCommon {
-    fun timePeriodNum(now: Instant = Instant.now()): Long =
-        HsTimePeriod.containing(now).intervalNum
-
-    fun buildBlindedPubkey(identityPublic: ByteArray, period: HsTimePeriod): ByteArray =
-        HsKeyBlind.blindPublicKey(identityPublic, period)
-
-    fun hsdirIndexHint(identityHex: String, periodNum: Long, replica: Int): String =
-        "$identityHex|$periodNum|$replica"
-
-    /** C Tor `hs_get_time_period_length` default (1440 min). */
-    const val TIME_PERIOD_LENGTH_MIN: Int = 1440
-
-    fun validatePeriodIndex(periodNum: Long): Boolean = periodNum > 0
-}
-
-/**
  * HS config surface (C Tor `hs_config.c` / `hs_opts_t`).
  * Inventory: `L1:feature/hs/hs_config.c`, `L2:feature/hs/hs_opts_t`
  */
@@ -74,6 +54,8 @@ data class HsOpts(
 data class HsIdentCircuit(
     val serviceIdentityHex: String? = null,
     val blindedHex: String? = null,
+    /** C Tor `intro_auth_pk` hex (required for valid intro circuits). */
+    val introAuthKeyHex: String? = null,
     val isClient: Boolean = true,
     val purpose: String = "general",
 )
@@ -216,64 +198,4 @@ class HsIntroPointTable {
     fun size(): Int = byAuth.size
 
     fun clear() = byAuth.clear()
-}
-
-/**
- * HS metrics counters (C Tor `hs_metrics*.c`).
- * Inventory: `L1:feature/hs/hs_metrics.c`, `hs_metrics_entry.c`, `hs_sys.c`
- */
-object HsMetrics {
-    private val introReceived = AtomicInteger(0)
-    private val introRejected = AtomicInteger(0)
-    private val descFetches = AtomicInteger(0)
-    private val descUploads = AtomicInteger(0)
-    private val rendezvousOk = AtomicInteger(0)
-
-    fun noteIntroReceived() { introReceived.incrementAndGet() }
-    fun noteIntroRejected() { introRejected.incrementAndGet() }
-    fun noteDescFetch() { descFetches.incrementAndGet() }
-    fun noteDescUpload() { descUploads.incrementAndGet() }
-    fun noteRendezvousOk() { rendezvousOk.incrementAndGet() }
-
-    fun snapshot(): Map<String, Int> = mapOf(
-        "hs_intro_received" to introReceived.get(),
-        "hs_intro_rejected" to introRejected.get(),
-        "hs_desc_fetches" to descFetches.get(),
-        "hs_desc_uploads" to descUploads.get(),
-        "hs_rendezvous_ok" to rendezvousOk.get(),
-    )
-
-    fun exportPrometheus(): String = buildString {
-        for ((k, v) in snapshot()) {
-            append("tor_hs_").append(k).append(' ').append(v).append('\n')
-        }
-    }
-
-    fun reset() {
-        introReceived.set(0)
-        introRejected.set(0)
-        descFetches.set(0)
-        descUploads.set(0)
-        rendezvousOk.set(0)
-    }
-}
-
-object HsSys {
-    @Volatile
-    private var started: Boolean = false
-
-    fun enabled(config: TorConfig): Boolean =
-        config.hiddenServices.isNotEmpty() || HsOpts.fromTorConfig(config).services.isNotEmpty()
-
-    fun init(config: TorConfig) {
-        started = enabled(config)
-        if (started) HsMetrics.reset()
-    }
-
-    fun shutdown() {
-        started = false
-        HsDosDefense.shared.clear()
-    }
-
-    fun isStarted(): Boolean = started
 }

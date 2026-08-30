@@ -34,9 +34,12 @@ class DirAuthEntryGuardReasonsTest {
 
     @Test
     fun `reasons tables`() {
-        assertEquals("PROTOCOL", Reasons.circuitEndToControl(1))
+        assertEquals("TORPROTOCOL", Reasons.circuitEndToControl(1))
         assertEquals("EXITPOLICY", Reasons.streamEndToControl(Reasons.STREAM_EXITPOLICY))
-        assertEquals(0x02, Reasons.streamEndToSocks5(Reasons.STREAM_EXITPOLICY))
+        assertEquals(Reasons.SOCKS5_NOT_ALLOWED, Reasons.streamEndToSocks5(Reasons.STREAM_EXITPOLICY))
+        assertEquals(Reasons.SOCKS5_CONNECTION_REFUSED, Reasons.streamEndToSocks5(Reasons.STREAM_DONE))
+        assertEquals("DONE", Reasons.orconnEndToControl(Reasons.ORCONN_DONE))
+        assertEquals("CONNECTRESET", Reasons.orconnEndToControl(Reasons.ORCONN_CONNRESET))
     }
 
     @Test

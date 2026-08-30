@@ -15,13 +15,17 @@ import java.util.Base64
  * Onion service v3 descriptor parse / decrypt / encrypt (rend-spec HS-DESC).
  */
 data class HsDescriptorOuter(
-    val lifetimeHours: Int,
+    /** Minutes — C Tor / rend-spec `descriptor-lifetime`. */
+    val lifetimeMinutes: Int,
     val signingKeyCertPem: String,
     val revisionCounter: Long,
     val superencrypted: ByteArray,
     val signatureB64: String?,
     val raw: String,
-)
+) {
+    @Deprecated("Use lifetimeMinutes (C Tor stores minutes)", ReplaceWith("lifetimeMinutes"))
+    val lifetimeHours: Int get() = lifetimeMinutes
+}
 
 data class IntroductionPoint(
     /** Packed nspec + link-specifier list from the introduction-point line. */
@@ -131,7 +135,7 @@ object HsDescriptorCodec {
             stringConstant = "hsdir-encrypted-data",
         )
         val text = secondPlain.decodeToString().trimEnd('\u0000')
-        return parseInner(text)
+        return parseInnerPlaintext(text)
     }
 
     /**
@@ -155,11 +159,12 @@ object HsDescriptorCodec {
         val firstText = firstPlainBytes.decodeToString().trimEnd('\u0000')
         val (ephemeral, entries) = HsClientAuth.parseAuthClients(firstText)
         require(ephemeral != null) { "missing desc-auth-ephemeral-key" }
-        val wantId = HsClientAuth.clientId(client.publicKey)
-        val entry = entries.firstOrNull { it.clientId.contentEquals(wantId) }
-            ?: error("no auth-client entry for this client")
-        val cookie = HsClientAuth.openCookie(client.privateKey, ephemeral, entry.encryptedCookie)
-        return decrypt(outer, publicIdentity, blindedPublic, cookie)
+        val entry = entries.firstNotNullOfOrNull { e ->
+            HsClientAuth.openCookie(subcred, client.privateKey, ephemeral, e)?.let { cookie ->
+                e to cookie
+            }
+        } ?: error("no auth-client entry for this client")
+        return decrypt(outer, publicIdentity, blindedPublic, entry.second)
     }
 
     /** Build a signed outer HS descriptor document (no client auth). */
@@ -195,7 +200,12 @@ object HsDescriptorCodec {
             revision = input.revisionCounter,
             stringConstant = "hsdir-encrypted-data",
         )
-        val firstPlain = buildFirstLayerPlaintext(innerBlob, input.authorizedClients, cookie)
+        val firstPlain = buildFirstLayerPlaintext(
+            innerBlob,
+            input.authorizedClients,
+            cookie,
+            subcredential = subcred,
+        )
         val superEnc = encryptLayer(
             plaintext = padTo10k(firstPlain.toByteArray()),
             secretData = blindedPublic,
@@ -272,23 +282,27 @@ object HsDescriptorCodec {
         encryptedBlob: ByteArray,
         authorizedClients: List<HsClientAuth.ClientCred> = emptyList(),
         descriptorCookie: ByteArray = ByteArray(0),
+        subcredential: ByteArray = ByteArray(32),
     ): String {
         val ephemeral = org.kotlintor.crypto.Curve25519.generateKeyPair()
         val authClients = if (authorizedClients.isNotEmpty()) {
-            require(descriptorCookie.size == 16)
+            require(descriptorCookie.size == HsClientAuth.COOKIE_LEN)
             authorizedClients.joinToString("\n") { cred ->
-                val (_, enc) = HsClientAuth.sealCookie(ephemeral.privateKey, cred.publicKey, descriptorCookie)
-                HsClientAuth.authClientLine(cred, enc)
+                val (_, entry) = HsClientAuth.sealCookie(
+                    subcredential,
+                    ephemeral.privateKey,
+                    cred.publicKey,
+                    descriptorCookie,
+                )
+                HsClientAuth.authClientLine(entry)
             }
         } else {
             (0 until 16).joinToString("\n") {
-                val clientId = SecureRandomSource.nextBytes(8)
-                val iv = SecureRandomSource.nextBytes(16)
-                val cookie = SecureRandomSource.nextBytes(16)
-                "auth-client " +
-                    Base64.getEncoder().withoutPadding().encodeToString(clientId) + " " +
-                    Base64.getEncoder().withoutPadding().encodeToString(iv) + " " +
-                    Base64.getEncoder().withoutPadding().encodeToString(cookie)
+                HsClientAuth.authClientLine(HsClientAuth.AuthClientEntry(
+                    clientId = SecureRandomSource.nextBytes(HsClientAuth.CLIENT_ID_LEN),
+                    iv = SecureRandomSource.nextBytes(HsClientAuth.IV_LEN),
+                    encryptedCookie = SecureRandomSource.nextBytes(HsClientAuth.COOKIE_LEN),
+                ))
             }
         }
         // No final newline (C Tor compatibility note in rend-spec).
@@ -364,7 +378,8 @@ object HsDescriptorCodec {
         return AesCtr(secretKey, secretIv).process(ciphertext)
     }
 
-    private fun parseInner(text: String): HsDescriptorInner {
+    /** Parse decrypted inner plaintext (create2-formats / intro points). */
+    fun parseInnerPlaintext(text: String): HsDescriptorInner {
         val formats = mutableListOf<Int>()
         val intros = mutableListOf<IntroductionPoint>()
         var singleOnion = false
@@ -443,6 +458,13 @@ object HsDescriptorCodec {
         return data.copyOf(data.size + (PAD_BLOCK - rem))
     }
 
+    /** Expose padding for C Tor `build_plaintext_padding` alias. */
+    fun padPlaintext(data: ByteArray): ByteArray = padTo10k(data)
+
+    /** Extract PEM MESSAGE under [keyword] for desc_decode_* aliases. */
+    fun extractEncryptedObject(document: String, keyword: String): ByteArray? =
+        extractPemObject(document, keyword)
+
     private fun pemMessage(blob: ByteArray): String {
         val b64 = Base64.getEncoder().encodeToString(blob)
         val lines = b64.chunked(64).joinToString("\n")
@@ -475,4 +497,139 @@ object HsDescriptorCodec {
         while (b64.length % 4 != 0) b64 += "="
         return Base64.getDecoder().decode(b64)
     }
+}
+
+/**
+ * Naming primary for `hs_descriptor.c`.
+ *
+ * Inventory: `L1:feature/hs/hs_descriptor.c`
+ *
+ * Codecs: [HsDescriptorCodec]; wire types: [HsDescriptorOuter], [HsDescriptorInner].
+ */
+object HsDescriptor {
+    fun outerPresent(o: HsDescriptorOuter?): Boolean = o != null
+
+    /** C Tor `build_plaintext_padding`. */
+    fun buildPlaintextPadding(data: ByteArray): ByteArray = HsDescriptorCodec.padPlaintext(data)
+
+    /** C Tor `cert_is_valid` — PEM present and decodes a certified key. */
+    fun certIsValid(certPem: String?): Boolean {
+        if (certPem.isNullOrBlank()) return false
+        return runCatching { Ed25519Cert.certifiedKeyFromPem(certPem).size == 32 }.getOrDefault(false)
+    }
+
+    /** C Tor `decode_introduction_point`. */
+    fun decodeIntroductionPoint(ip: IntroductionPoint): IntroductionPoint = ip
+
+    /** C Tor `decode_link_specifiers`. */
+    fun decodeLinkSpecifiers(blob: ByteArray): ParsedLinkSpecs = LinkSpecifiers.parsePacked(blob)
+
+    /** C Tor `encode_link_specifiers`. */
+    fun encodeLinkSpecifiers(relay: org.kotlintor.dir.RouterStatus, ed25519Identity: ByteArray? = relay.ed25519Identity): ByteArray =
+        LinkSpecifiers.packForRelay(relay, ed25519Identity)
+
+    /** C Tor `desc_decode_encrypted_v3` — unwrap encrypted PEM object bytes. */
+    fun descDecodeEncryptedV3(document: String): ByteArray? =
+        HsDescriptorCodec.extractEncryptedObject(document, "encrypted")
+
+    /** C Tor `desc_decode_superencrypted_v3`. */
+    fun descDecodeSuperencryptedV3(document: String): ByteArray? =
+        HsDescriptorCodec.extractEncryptedObject(document, "superencrypted")
+
+    /** C Tor `desc_sig_is_valid` — Ed25519 verify over SIG_PREFIX ‖ signed region. */
+    fun descSigIsValid(outer: HsDescriptorOuter): Boolean {
+        val sigB64 = outer.signatureB64 ?: return false
+        if (outer.signingKeyCertPem.isBlank()) return false
+        return runCatching {
+            val signingPub = Ed25519Cert.certifiedKeyFromPem(outer.signingKeyCertPem)
+            val sig = Base64.getDecoder().decode(
+                sigB64.padEnd((sigB64.length + 3) / 4 * 4, '='),
+            )
+            val sigLine = outer.raw.indexOf("\nsignature ")
+            val body = if (sigLine >= 0) outer.raw.substring(0, sigLine + 1) else outer.raw
+            val toVerify = concat(
+                "Tor onion service descriptor sig v3".toByteArray(),
+                body.toByteArray(Charsets.US_ASCII),
+            )
+            Ed25519Keys.verify(signingPub, toVerify, sig)
+        }.getOrDefault(false)
+    }
+
+    /** C Tor `encrypted_data_length_is_valid` — need salt(16)+mac(32)+≥1 ciphertext byte. */
+    fun encryptedDataLengthIsValid(len: Int): Boolean =
+        len > 16 + 32 && len <= HsCache.DEFAULT_MAX_DESC
+
+    /** C Tor `hs_desc_authorized_client_free_`. */
+    fun hsDescAuthorizedClientFree_(
+        entry: HsClientAuth.AuthClientEntry?,
+    ): HsClientAuth.AuthClientEntry? = null
+
+    /**
+     * C Tor `hs_desc_build_authorized_client`.
+     */
+    fun hsDescBuildAuthorizedClient(
+        subcredential: ByteArray,
+        ephemeralPriv: ByteArray,
+        clientPublic: ByteArray,
+        cookie: ByteArray = org.kotlintor.util.SecureRandomSource.nextBytes(HsClientAuth.COOKIE_LEN),
+    ): HsClientAuth.AuthClientEntry =
+        HsClientAuth.sealCookie(subcredential, ephemeralPriv, clientPublic, cookie).second
+
+    /** C Tor `hs_desc_build_fake_authorized_client` — random pad entry. */
+    fun hsDescBuildFakeAuthorizedClient(): HsClientAuth.AuthClientEntry =
+        HsClientAuth.AuthClientEntry(
+            clientId = org.kotlintor.util.SecureRandomSource.nextBytes(HsClientAuth.CLIENT_ID_LEN),
+            iv = org.kotlintor.util.SecureRandomSource.nextBytes(HsClientAuth.IV_LEN),
+            encryptedCookie = org.kotlintor.util.SecureRandomSource.nextBytes(HsClientAuth.COOKIE_LEN),
+        )
+
+    /** C Tor `hs_desc_decode_descriptor` — outer document only (decrypt is separate). */
+    fun hsDescDecodeDescriptor(document: String): HsDescriptorOuter? =
+        runCatching { HsDescriptorCodec.parseOuter(document) }.getOrNull()
+
+    /** C Tor `hs_desc_decode_encrypted`. */
+    fun hsDescDecodeEncrypted(document: String): ByteArray? = descDecodeEncryptedV3(document)
+
+    /** C Tor `hs_desc_decode_superencrypted`. */
+    fun hsDescDecodeSuperencrypted(document: String): ByteArray? = descDecodeSuperencryptedV3(document)
+
+    /** C Tor `hs_desc_decode_plaintext` — parse inner plaintext layer. */
+    fun hsDescDecodePlaintext(plaintext: String): HsDescriptorInner? =
+        runCatching { HsDescriptorCodec.parseInnerPlaintext(plaintext) }.getOrNull()
+
+    /** C Tor `hs_desc_encrypted_data_free_`. */
+    fun hsDescEncryptedDataFree_(data: ByteArray?): ByteArray? = null
+
+    /** C Tor `hs_desc_encrypted_data_free_contents`. */
+    fun hsDescEncryptedDataFreeContents(data: ByteArray?) {
+        // JVM GC; no-op contents wipe marker.
+    }
+
+    /** C Tor `hs_desc_intro_point_free_`. */
+    fun hsDescIntroPointFree_(ip: IntroductionPoint?): IntroductionPoint? = null
+
+    /** C Tor `hs_desc_intro_point_new`. */
+    fun hsDescIntroPointNew(
+        linkSpecifiers: ByteArray,
+        onionKeyNtor: ByteArray,
+        encKeyNtor: ByteArray = ByteArray(32),
+    ): IntroductionPoint = IntroductionPoint(linkSpecifiers, onionKeyNtor, encKeyNtor, null, null)
+
+    /** C Tor `hs_desc_obj_size`. */
+    fun hsDescObjSize(outer: HsDescriptorOuter): Int =
+        outer.raw.length + outer.superencrypted.size + (outer.signatureB64?.length ?: 0)
+
+    /** C Tor `hs_desc_plaintext_data_free_`. */
+    fun hsDescPlaintextDataFree_(inner: HsDescriptorInner?): HsDescriptorInner? = null
+
+    /** C Tor `hs_desc_plaintext_data_free_contents`. */
+    fun hsDescPlaintextDataFreeContents(inner: HsDescriptorInner?) {
+        // no-op
+    }
+
+    /** C Tor `hs_desc_plaintext_obj_size`. */
+    fun hsDescPlaintextObjSize(inner: HsDescriptorInner): Int = inner.raw.length
+
+    /** C Tor `hs_desc_superencrypted_data_free_`. */
+    fun hsDescSuperencryptedDataFree_(data: ByteArray?): ByteArray? = null
 }

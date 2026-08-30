@@ -28,4 +28,14 @@ class AddressSetTest {
         val empty = AddressSet(32)
         assertFalse(empty.probablyContains(other))
     }
+
+    @Test
+    fun `ipv6 and clear`() {
+        val set = AddressSet(64)
+        val v6 = InetAddress.getByName("2001:db8::1")
+        set.add(v6)
+        assertTrue(set.probablyContains(v6))
+        set.clear()
+        assertFalse(set.probablyContains(v6))
+    }
 }

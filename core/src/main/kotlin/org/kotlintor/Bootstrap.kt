@@ -4,30 +4,67 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-enum class BootstrapPhase(val tag: String, val progress: Int) {
-    STARTING("NOTICE BOOTSTRAP PROGRESS=0 TAG=starting SUMMARY=\"Starting\"", 0),
-    CONN_DIR("NOTICE BOOTSTRAP PROGRESS=5 TAG=conn_dir SUMMARY=\"Connecting to directory server\"", 5),
-    HANDSHAKE_DIR("NOTICE BOOTSTRAP PROGRESS=10 TAG=handshake_dir SUMMARY=\"Finishing handshake with directory server\"", 10),
-    REQUESTING_STATUS("NOTICE BOOTSTRAP PROGRESS=15 TAG=requesting_status SUMMARY=\"Fetching consensus\"", 15),
-    LOADING_STATUS("NOTICE BOOTSTRAP PROGRESS=20 TAG=loading_status SUMMARY=\"Loading consensus\"", 20),
-    LOADING_KEYS("NOTICE BOOTSTRAP PROGRESS=40 TAG=loading_keys SUMMARY=\"Loading authority certificates\"", 40),
-    REQUESTING_DESCRIPTORS("NOTICE BOOTSTRAP PROGRESS=45 TAG=requesting_descriptors SUMMARY=\"Fetching microdescriptors\"", 45),
-    LOADING_DESCRIPTORS("NOTICE BOOTSTRAP PROGRESS=50 TAG=loading_descriptors SUMMARY=\"Loading microdescriptors\"", 50),
-    CONN_OR("NOTICE BOOTSTRAP PROGRESS=80 TAG=conn_or SUMMARY=\"Connecting to the Tor network\"", 80),
-    HANDSHAKE_OR("NOTICE BOOTSTRAP PROGRESS=85 TAG=handshake_or SUMMARY=\"Finishing handshake with first hop\"", 85),
-    CIRCUIT_CREATE("NOTICE BOOTSTRAP PROGRESS=90 TAG=circuit_create SUMMARY=\"Establishing a Tor circuit\"", 90),
-    DONE("NOTICE BOOTSTRAP PROGRESS=100 TAG=done SUMMARY=\"Done\"", 100),
+/**
+ * C Tor control-spec `STATUS_CLIENT BOOTSTRAP` phases.
+ * [tag] is the default STATUS line; [advance] may override SUMMARY for more detail.
+ */
+enum class BootstrapPhase(val tagName: String, val progress: Int, val defaultSummary: String) {
+    STARTING("starting", 0, "Starting"),
+    CONN_DIR("conn_dir", 5, "Connecting to directory server"),
+    HANDSHAKE_DIR("handshake_dir", 10, "Finishing handshake with directory server"),
+    REQUESTING_STATUS("requesting_status", 15, "Fetching consensus"),
+    LOADING_STATUS("loading_status", 20, "Loading consensus"),
+    LOADING_KEYS("loading_keys", 40, "Loading authority certificates"),
+    REQUESTING_DESCRIPTORS("requesting_descriptors", 45, "Fetching descriptors"),
+    LOADING_DESCRIPTORS("loading_descriptors", 50, "Loading descriptors"),
+    CONN_OR("conn_or", 80, "Connecting to the Tor network"),
+    HANDSHAKE_OR("handshake_or", 85, "Finishing handshake with first hop"),
+    CIRCUIT_CREATE("circuit_create", 90, "Establishing a Tor circuit"),
+    DONE("done", 100, "Done"),
+    ;
+
+    fun statusLine(summary: String = defaultSummary): String =
+        "NOTICE BOOTSTRAP PROGRESS=$progress TAG=$tagName SUMMARY=\"${escapeSummary(summary)}\""
+
+    /** Legacy field used by older call sites expecting a full STATUS line. */
+    val tag: String get() = statusLine()
+
+    companion object {
+        fun escapeSummary(s: String): String =
+            s.replace('\\', '/').replace('"', '\'')
+    }
 }
 
-class BootstrapTracker {
+class BootstrapTracker(
+    private val onAdvance: ((String) -> Unit)? = null,
+) {
     private val _phase = MutableStateFlow(BootstrapPhase.STARTING)
     val phase: StateFlow<BootstrapPhase> = _phase.asStateFlow()
 
-    fun advance(to: BootstrapPhase) {
+    /**
+     * Advance to [to] if it is not behind the current progress.
+     * Always notifies [onAdvance] when the phase actually changes (or [forceNotify]).
+     */
+    fun advance(
+        to: BootstrapPhase,
+        summary: String? = null,
+        forceNotify: Boolean = false,
+    ) {
+        val changed = to.progress >= _phase.value.progress && to != _phase.value
         if (to.progress >= _phase.value.progress) {
             _phase.value = to
         }
+        if (changed || forceNotify) {
+            val line = to.statusLine(summary ?: to.defaultSummary)
+            onAdvance?.invoke(line)
+        }
     }
 
-    val statusLine: String get() = _phase.value.tag
+    /** Emit the current phase again (e.g. daemon start). */
+    fun notifyCurrent(summary: String? = null) {
+        val p = _phase.value
+        onAdvance?.invoke(p.statusLine(summary ?: p.defaultSummary))
+    }
+
+    val statusLine: String get() = _phase.value.statusLine()
 }

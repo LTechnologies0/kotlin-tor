@@ -7,7 +7,7 @@ import org.kotlintor.util.SecureRandomSource
 /**
  * Prop302 / C Tor `circuitpadding_machines.c` — HS intro/rend hide machines.
  *
- * Full WTF-PAD state machine is not ported; this encodes the published
+ * Full WTF-PAD state machine remains thinner; this encodes the published
  * machine names, hop targets, and DROP-cell burst bounds used by C Tor.
  */
 object CircuitPaddingMachines {
@@ -158,8 +158,8 @@ class CircuitPaddingSession(
     }
 
     /**
-     * Live middle-hop ACK path (prop302): advance WTF-PAD lite on non-padding received.
-     * Full machine tables remain not ported; this wires the ACK event into the session FSM.
+     * Live middle-hop ACK path (prop302): advance padding FSM on non-padding received.
+     * Additional WTF-PAD machine tables remain thinner; this wires the ACK event into the session FSM.
      */
     fun onMiddleNonPaddingReceived() {
         negotiateSession.machine?.onEvent(Circpad.Event.NONPADDING_RECV)

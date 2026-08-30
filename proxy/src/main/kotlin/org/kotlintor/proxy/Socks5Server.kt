@@ -157,6 +157,7 @@ class Socks5Server(
                             optimisticData = route.optimisticData,
                         )
                     } catch (e: Exception) {
+                        // One clean line; DemoLogBuffer tee will tag stderr without concatenating.
                         System.err.println(
                             "SOCKS connect ${route.endpoint.hostString()}:${route.endpoint.port} failed: ${e.message}",
                         )

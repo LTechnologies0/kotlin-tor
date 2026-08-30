@@ -13,11 +13,16 @@ class OutboundBindProtectTest {
     @AfterEach
     fun clearProtector() {
         PlatformNatives.socketProtector = null
+        PlatformNatives.socketProtectorSocket = null
     }
 
     @Test
     fun `OutboundBind connect invokes socket protector before dial`() {
         val hits = AtomicInteger(0)
+        PlatformNatives.socketProtectorSocket = { _ ->
+            hits.incrementAndGet()
+            true
+        }
         PlatformNatives.socketProtector = { _ ->
             hits.incrementAndGet()
             true
@@ -36,6 +41,10 @@ class OutboundBindProtectTest {
     @Test
     fun `PtSocksDialer connect invokes socket protector`() {
         val hits = AtomicInteger(0)
+        PlatformNatives.socketProtectorSocket = { _ ->
+            hits.incrementAndGet()
+            true
+        }
         PlatformNatives.socketProtector = { _ ->
             hits.incrementAndGet()
             true

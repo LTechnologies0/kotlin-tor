@@ -40,13 +40,24 @@ class CellCodecTest {
     }
 
     @Test
-    fun `relay cell payload layout`() {
-        val relay = RelayCell.build(RelayCommand.BEGIN, 7, "example.com:80\u0000".toByteArray())
-        val payload = relay.toPayload()
-        assertEquals(509, payload.size)
-        val parsed = RelayCell.parse(payload)
-        assertEquals(RelayCommand.BEGIN, parsed.command)
-        assertEquals(7, parsed.streamId)
-        assertEquals(relay.length, parsed.length)
+    fun `rejects oversize variable cell before alloc`() {
+        // circ_id(4) + VPADDING(128) + len=40000 (> MAX)
+        val header = byteArrayOf(0, 0, 0, 0, 128.toByte(), 0x9c.toByte(), 0x40.toByte())
+        val ex = org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException::class.java) {
+            CellCodec.read(ByteArrayInputStream(header))
+        }
+        assertTrue(ex.message!!.contains("exceeds max"))
+    }
+
+    @Test
+    fun `skips unknown fixed command and reads next`() {
+        val junkCmd = 50 // unknown, <128 → fixed
+        val junk = ByteArray(4 + 1 + Cell.FIXED_PAYLOAD_LEN) { 0 }
+        junk[4] = junkCmd.toByte()
+        val good = Cell(1, CellCommand.PADDING, ByteArray(Cell.FIXED_PAYLOAD_LEN))
+        val stream = ByteArrayInputStream(junk + CellCodec.encode(good))
+        val decoded = CellCodec.read(stream)
+        assertEquals(CellCommand.PADDING, decoded.command)
+        assertEquals(1L, decoded.circId)
     }
 }

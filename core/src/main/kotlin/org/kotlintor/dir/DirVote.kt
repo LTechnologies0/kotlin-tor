@@ -99,12 +99,299 @@ object DirVote {
     fun preferredConsensusMethod(votes: List<Int>): Int {
         val supported = votes.filter { it in MIN_SUPPORTED_CONSENSUS_METHOD..MAX_SUPPORTED_CONSENSUS_METHOD }
         if (supported.isEmpty()) return MIN_SUPPORTED_CONSENSUS_METHOD
-        // Majority floor among advertised methods (simplified compute_consensus_method).
         val counts = supported.groupingBy { it }.eachCount()
         val majority = (votes.size + 1) / 2
         return counts.filter { it.value >= majority }.keys.maxOrNull()
             ?: supported.maxOrNull()!!
     }
+
+    /**
+     * C Tor `authority_cert_dup` — clone certificate PEM/document text.
+     */
+    fun authorityCertDup(certDocument: String): String = certDocument
+
+    data class RouterInfoLite(
+        val identityHex: String,
+        val ipv4: String = "0.0.0.0",
+        val ipv6: String? = null,
+        val orPort: Int = 0,
+        val bandwidthKb: Int = 0,
+        val publishedEpochSec: Long = 0,
+        val isRunning: Boolean = true,
+    )
+
+    /** C Tor `compare_routerinfo_by_ipv4` — negative if a < b. */
+    fun compareRouterinfoByIpv4(a: RouterInfoLite, b: RouterInfoLite): Int =
+        compareIp4(a.ipv4, b.ipv4).takeIf { it != 0 }
+            ?: a.orPort.compareTo(b.orPort).takeIf { it != 0 }
+            ?: a.identityHex.compareTo(b.identityHex, ignoreCase = true)
+
+    /** C Tor `compare_routerinfo_by_ipv6`. */
+    fun compareRouterinfoByIpv6(a: RouterInfoLite, b: RouterInfoLite): Int {
+        val aa = a.ipv6 ?: ""
+        val bb = b.ipv6 ?: ""
+        return aa.compareTo(bb).takeIf { it != 0 }
+            ?: a.orPort.compareTo(b.orPort).takeIf { it != 0 }
+            ?: a.identityHex.compareTo(b.identityHex, ignoreCase = true)
+    }
+
+    /**
+     * C Tor `compare_routerinfo_usefulness` — prefer higher bandwidth / newer published.
+     * Returns negative if [first] is less useful than [second].
+     */
+    fun compareRouterinfoUsefulness(first: RouterInfoLite, second: RouterInfoLite): Int {
+        if (first.isRunning != second.isRunning) return if (first.isRunning) 1 else -1
+        if (first.bandwidthKb != second.bandwidthKb) return first.bandwidthKb.compareTo(second.bandwidthKb)
+        return first.publishedEpochSec.compareTo(second.publishedEpochSec)
+    }
+
+    /** C Tor `compute_consensus_package_lines` — join validated RecommendedPackages. */
+    fun computeConsensusPackageLines(packageLines: List<String>): String =
+        packageLines.filter { RecommendPkg.validate(it) }.joinToString("\n") { "package $it" }
+
+    private fun compareIp4(a: String, b: String): Int {
+        fun octets(s: String): Long {
+            val p = s.split('.')
+            if (p.size != 4) return 0L
+            var v = 0L
+            for (o in p) v = (v shl 8) or (o.toLongOrNull()?.coerceIn(0, 255) ?: 0)
+            return v
+        }
+        return octets(a).compareTo(octets(b))
+    }
+
+    /**
+     * C Tor `dirserv_generate_networkstatus_vote_obj` — build a minimal vote document body.
+     */
+    fun dirservGenerateNetworkstatusVoteObj(
+        routers: List<RouterInfoLite>,
+        published: String = "2020-01-01 00:00:00",
+        fingerprint: String = "00".repeat(20),
+    ): String = buildString {
+        appendLine("network-status-version 3")
+        appendLine("vote-status vote")
+        appendLine("published $published")
+        appendLine("fingerprint $fingerprint")
+        appendLine("known-flags ${UNIVERSAL_FLAGS.joinToString(" ")}")
+        for (r in routers) {
+            appendLine(
+                "r Unnamed ${r.identityHex} AA $published ${r.ipv4} ${r.orPort} 0",
+            )
+            appendLine(BandwidthVote.formatWLine(r.bandwidthKb.toLong()))
+            val flags = buildList {
+                if (r.isRunning) add("Running")
+                add("Valid")
+                add("V2Dir")
+            }
+            appendLine("s ${flags.joinToString(" ")}")
+        }
+        appendLine("directory-footer")
+    }
+
+    /** C Tor `dirvote_act` — advance [actor] schedule; returns next wake epoch. */
+    fun dirvoteAct(actor: DirVoteActor, nowEpochSec: Long): Long = actor.act(nowEpochSec)
+
+    /** C Tor `dirvote_add_vote`. */
+    fun dirvoteAddVote(actor: DirVoteActor, body: String, from: String = "local"): BandwidthVote.VoteDocument =
+        actor.addVote(body, from)
+
+    /** C Tor `dirvote_add_signatures` — attach signature block lines to consensus body. */
+    fun dirvoteAddSignatures(consensusBody: String, signatureBlock: String): String {
+        val body = consensusBody.trimEnd()
+        val sig = signatureBlock.trim()
+        return if (body.contains("directory-signature")) {
+            body + "\n" + sig + "\n"
+        } else {
+            body.trimEnd('\n') + "\n" + sig + "\n"
+        }
+    }
+
+    private val pendingCommits = LinkedHashMap<String, String>()
+
+    /** C Tor `dirvote_clear_commits`. */
+    fun dirvoteClearCommits() {
+        pendingCommits.clear()
+    }
+
+    fun dirvotePendingCommitCount(): Int = pendingCommits.size
+
+    fun dirvoteNoteCommit(identityHex: String, commitLine: String) {
+        pendingCommits[identityHex.lowercase()] = commitLine
+    }
+
+    /**
+     * C Tor `dirvote_compute_params` — majority param map from vote param lines.
+     */
+    fun dirvoteComputeParams(voteParamMaps: List<Map<String, Int>>): Map<String, Int> {
+        if (voteParamMaps.isEmpty()) return emptyMap()
+        val keys = voteParamMaps.flatMap { it.keys }.toSet()
+        val out = LinkedHashMap<String, Int>()
+        val majority = (voteParamMaps.size + 1) / 2
+        for (k in keys.sorted()) {
+            val vals = voteParamMaps.mapNotNull { it[k] }.sorted()
+            if (vals.size < majority) continue
+            out[k] = vals[vals.size / 2]
+        }
+        return out
+    }
+
+    /**
+     * C Tor `dirvote_create_microdescriptor` — minimal onion-key microdesc body.
+     */
+    fun dirvoteCreateMicrodescriptor(onionKeyPem: String, family: String? = null): String =
+        buildString {
+            appendLine("onion-key")
+            append(onionKeyPem.trimEnd())
+            appendLine()
+            if (!family.isNullOrBlank()) appendLine("family $family")
+        }
+
+    /** C Tor `dirvote_get_vote`. */
+    fun dirvoteGetVote(actor: DirVoteActor, key: String): BandwidthVote.VoteDocument? =
+        actor.pendingVotes().entries.firstOrNull { it.key.contains(key) }?.value
+            ?: actor.pendingVotes().values.firstOrNull()
+
+    /**
+     * C Tor `dirvote_dirreq_get_status_vote` — return cached vote body or empty.
+     */
+    fun dirvoteDirreqGetStatusVote(actor: DirVoteActor): String {
+        val v = actor.pendingVotes().values.firstOrNull() ?: return ""
+        return v.raw.ifBlank {
+            dirservGenerateNetworkstatusVoteObj(
+                v.routers.mapNotNull { r ->
+                    val id = r.identityHex ?: return@mapNotNull null
+                    RouterInfoLite(id, bandwidthKb = (r.measured ?: r.bandwidth).toInt())
+                },
+            )
+        }
+    }
+
+    /** C Tor `dirvote_format_all_microdesc_vote_lines`. */
+    fun dirvoteFormatAllMicrodescVoteLines(microdescs: List<String>): String =
+        microdescs.joinToString("\n") { md ->
+            val dig = org.kotlintor.crypto.Digests.sha256(md.toByteArray(Charsets.UTF_8))
+            "m " + dig.toHex().lowercase()
+        }
+
+    /** C Tor `dirvote_free_all` — clear actor votes + commits. */
+    fun dirvoteFreeAll(actor: DirVoteActor? = null) {
+        dirvoteClearCommits()
+        actor?.clearVotes()
+    }
+
+    /** C Tor `dirvote_get_intermediate_param_value`. */
+    fun dirvoteGetIntermediateParamValue(
+        paramMaps: List<Map<String, Int>>,
+        key: String,
+        default: Int = 0,
+    ): Int = dirvoteComputeParams(paramMaps)[key] ?: default
+
+    /** C Tor `dirvote_parse_sr_commits` — parse shared-rand-commit lines from vote text. */
+    fun dirvoteParseSrCommits(voteText: String): List<SharedRandom.Commit> {
+        val out = ArrayList<SharedRandom.Commit>()
+        for (raw in voteText.lineSequence()) {
+            val line = raw.trim()
+            if (!line.startsWith(SharedRandom.COMMIT_NS)) continue
+            val p = line.split(Regex("\\s+"))
+            if (p.size < 5) continue
+            val fp = p[3]
+            val encCommit = p[4]
+            val encReveal = p.getOrNull(5)
+            if (fp.length != 40 || encCommit.length != SharedRandom.COMMIT_BASE64_LEN) continue
+            if (encReveal != null && encReveal.length == SharedRandom.REVEAL_BASE64_LEN) {
+                if (SharedRandom.commitDecode(encCommit, encReveal)) {
+                    val id = org.kotlintor.util.hexToBytes(fp)
+                    if (id.size == 20) {
+                        val revealRaw = runCatching {
+                            java.util.Base64.getDecoder().decode(encReveal)
+                        }.getOrNull() ?: continue
+                        if (revealRaw.size >= 8 + SharedRandom.RANDOM_NUMBER_LEN) {
+                            out += SharedRandom.Commit(
+                                rsaIdentity = id,
+                                commitTs = 0,
+                                revealTs = 0,
+                                randomNumber = revealRaw.copyOfRange(8, 8 + SharedRandom.RANDOM_NUMBER_LEN),
+                                hashedReveal = org.kotlintor.crypto.Digests.sha3_256(
+                                    encReveal.toByteArray(Charsets.US_ASCII),
+                                ),
+                                encodedReveal = encReveal,
+                                encodedCommit = encCommit,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    /** C Tor `format_networkstatus_vote` — alias of vote object generation. */
+    fun formatNetworkstatusVote(
+        routers: List<RouterInfoLite>,
+        published: String = "2020-01-01 00:00:00",
+        fingerprint: String = "00".repeat(20),
+    ): String = dirservGenerateNetworkstatusVoteObj(routers, published, fingerprint)
+
+    /** C Tor `format_recommended_version_list`. */
+    fun formatRecommendedVersionList(versions: List<String>): String =
+        versions.joinToString(",") { it.trim() }.let { "recommended-client-versions $it" }
+
+    /**
+     * C Tor `get_all_possible_sybil` / `get_sybil_list_by_ip_version` —
+     * identities sharing the same IP beyond [maxPerAddr].
+     */
+    fun getAllPossibleSybil(
+        routers: List<RouterInfoLite>,
+        maxPerAddr: Int = 2,
+    ): Set<String> {
+        val byIp = routers.groupBy { it.ipv4 }
+        val out = LinkedHashSet<String>()
+        for ((_, group) in byIp) {
+            if (group.size > maxPerAddr) {
+                group.drop(maxPerAddr).forEach { out += it.identityHex.lowercase() }
+            }
+        }
+        return out
+    }
+
+    fun getSybilListByIpVersion(
+        routers: List<RouterInfoLite>,
+        ipv6: Boolean = false,
+        maxPerAddr: Int = 2,
+    ): Set<String> {
+        if (!ipv6) return getAllPossibleSybil(routers, maxPerAddr)
+        val byIp = routers.groupBy { it.ipv6 ?: "" }.filterKeys { it.isNotEmpty() }
+        val out = LinkedHashSet<String>()
+        for ((_, group) in byIp) {
+            if (group.size > maxPerAddr) {
+                group.drop(maxPerAddr).forEach { out += it.identityHex.lowercase() }
+            }
+        }
+        return out
+    }
+
+    /** C Tor `make_consensus_method_list`. */
+    fun makeConsensusMethodList(
+        min: Int = MIN_SUPPORTED_CONSENSUS_METHOD,
+        max: Int = MAX_SUPPORTED_CONSENSUS_METHOD,
+    ): String = (min..max).joinToString(" ")
+
+    /**
+     * C Tor `networkstatus_compute_bw_weights_v10` — simplified equal weights line.
+     */
+    fun networkstatusComputeBwWeightsV10(
+        weightScale: Int = 10_000,
+    ): String =
+        "bandwidth-weights Wbd=$weightScale Wbe=$weightScale Wbg=$weightScale Wbm=$weightScale " +
+            "Wdb=$weightScale Web=$weightScale Wed=$weightScale Wee=$weightScale Weg=$weightScale " +
+            "Wem=$weightScale Wgb=$weightScale Wgd=$weightScale Wgg=$weightScale Wgm=$weightScale " +
+            "Wmb=$weightScale Wmd=$weightScale Wme=$weightScale Wmg=$weightScale Wmm=$weightScale"
+
+    /** C Tor `networkstatus_add_detached_signatures`. */
+    fun networkstatusAddDetachedSignatures(
+        consensusBody: String,
+        detached: DetachedSignatures.Detached,
+    ): String = DetachedSignatures.attachToConsensus(consensusBody, detached.signatures)
 }
 
 /**
@@ -188,17 +475,19 @@ class DirVoteActor(
         for (r in doc.routers) {
             val rsaTok = r.identityHex
             val ed = r.ed25519IdentityHex
+            var keypinOk = true
             // Keypin expects raw SHA1 digests; only apply when identity looks like hex40.
             if (rsaTok != null && ed != null &&
                 rsaTok.length == 40 && rsaTok.all { it in "0123456789abcdefABCDEF" } &&
                 ed.length == 64 && ed.all { it in "0123456789abcdefABCDEF" }
             ) {
-                runCatching {
-                    fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-                    keypin.checkAndAdd(hex(rsaTok), hex(ed))
+                fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                when (keypin.checkAndAdd(hex(rsaTok), hex(ed))) {
+                    Keypin.Result.MISMATCH -> keypinOk = false
+                    else -> Unit
                 }
             }
-            if (rsaTok != null && r.ip != null && r.orPort != null) {
+            if (keypinOk && rsaTok != null && r.ip != null && r.orPort != null) {
                 reachability.noteTarget(
                     ReachabilityTracker.Target(
                         identityHex = rsaTok.lowercase(),
@@ -212,6 +501,10 @@ class DirVoteActor(
         val id = doc.header.published ?: from
         votes[id + ":" + (doc.routers.firstOrNull()?.identityHex ?: from)] = doc
         return doc
+    }
+
+    fun clearVotes() {
+        votes.clear()
     }
 
     fun loadGuardFractionFile(text: String): Int {

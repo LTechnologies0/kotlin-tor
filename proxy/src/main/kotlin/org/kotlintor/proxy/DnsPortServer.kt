@@ -19,18 +19,25 @@ import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 
 /**
- * DNSPort: UDP DNS → [ExitDialer.resolve] (Tor RELAY RESOLVE or clearnet).
+ * DNSPort: UDP DNS → [ExitDialer.resolve] (Tor RELAY RESOLVE or DNSSEC stub).
+ * On DNSSEC failure responds SERVFAIL; on Secure success sets AD=1.
  */
 class DnsPortServer(
     private val dialer: ExitDialer,
     private val scope: CoroutineScope,
     private val maxInFlight: Int = ProxyAcceptLimits.DEFAULT_DNS,
+    private val dnssecEnabled: Boolean = false,
 ) {
     constructor(
         client: TorClient,
         scope: CoroutineScope,
         maxInFlight: Int = ProxyAcceptLimits.DEFAULT_DNS,
-    ) : this(TorClientDialer(client), scope, maxInFlight)
+    ) : this(
+        dialer = TorClientDialer(client),
+        scope = scope,
+        maxInFlight = maxInFlight,
+        dnssecEnabled = client.dnssecValidate,
+    )
 
     private var job: Job? = null
     private var socket: DatagramSocket? = null
@@ -79,10 +86,24 @@ class DnsPortServer(
     private suspend fun handleQuery(ds: DatagramSocket, raw: ByteArray, from: InetAddress, port: Int) {
         try {
             val qname = parseQueryName(raw) ?: return
-            val addrs = runCatching { dialer.resolve(qname) }.getOrDefault(emptyList())
-            val resp = buildResponse(raw, addrs)
+            val outcome = runCatching {
+                val addrs = dialer.resolve(qname)
+                true to addrs
+            }.getOrElse { false to emptyList() }
+            val (ok, addrs) = outcome
+            val resp = when {
+                !ok && dnssecEnabled -> buildServfail(raw)
+                !ok -> buildResponse(raw, emptyList(), authenticated = false)
+                else -> buildResponse(raw, addrs, authenticated = dnssecEnabled && addrs.isNotEmpty())
+            }
             ds.send(DatagramPacket(resp, resp.size, from, port))
         } catch (_: Exception) {
+            if (dnssecEnabled) {
+                runCatching {
+                    val resp = buildServfail(raw)
+                    ds.send(DatagramPacket(resp, resp.size, from, port))
+                }
+            }
         }
     }
 
@@ -102,12 +123,47 @@ class DnsPortServer(
         return labels.joinToString(".").ifEmpty { null }
     }
 
-    private fun buildResponse(query: ByteArray, addrs: List<String>): ByteArray {
+    private fun buildServfail(query: ByteArray): ByteArray {
+        val out = ByteBuffer.allocate(512)
+        if (query.size >= 12) {
+            out.put(query, 0, 2)
+            // QR=1, RA copy RD, RCODE=SERVFAIL(2)
+            val flagsHi = ((query[2].toInt() and 0xff) or 0x80)
+            val flagsLo = (query[3].toInt() and 0xff and 0xf0) or 0x02
+            out.put(flagsHi.toByte())
+            out.put(flagsLo.toByte())
+            out.putShort(1)
+            out.putShort(0)
+            out.putShort(0)
+            out.putShort(0)
+            var i = 12
+            while (i < query.size && query[i].toInt() != 0) {
+                val len = query[i].toInt() and 0xff
+                out.put(query, i, 1 + len)
+                i += 1 + len
+            }
+            if (i < query.size) {
+                out.put(0)
+                i++
+                if (i + 4 <= query.size) out.put(query, i, 4)
+            }
+        }
+        return out.array().copyOf(out.position())
+    }
+
+    private fun buildResponse(
+        query: ByteArray,
+        addrs: List<String>,
+        authenticated: Boolean,
+    ): ByteArray {
         val out = ByteBuffer.allocate(512)
         if (query.size >= 12) {
             out.put(query, 0, 2)
             out.put(((query[2].toInt() and 0xff) or 0x80).toByte())
-            out.put(0x00)
+            // flags lo: RA=0, AD bit (0x20) when we locally validated
+            var flagsLo = 0x00
+            if (authenticated) flagsLo = flagsLo or 0x20
+            out.put(flagsLo.toByte())
             out.putShort(1)
             val an = addrs.count { it.contains('.') && !it.contains(':') }.coerceAtMost(8)
             out.putShort(an.toShort())

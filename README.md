@@ -4,7 +4,7 @@ Pure **Kotlin** Tor engine: a third implementation beside **C Tor / libtor** and
 Wire-compatible with the live Tor network, with a **C Tor–shaped surface** (torrc subset,
 control-spec subset, SOCKS5H).
 
-> **Status:** early (0.1.0-SNAPSHOT). Not anonymity-safe for production yet. Fail-closed by design.
+> **Status:** early (**0.1.1**). Not anonymity-safe for production yet. Fail-closed by design.
 > Do not claim Tor Browser fingerprinting. Prefer C Tor or Arti for sensitive use until audited.
 >
 > **Completeness:** feature demos ≠ C Tor parity. See
@@ -14,7 +14,7 @@ control-spec subset, SOCKS5H).
 >
 > **Live status:** directory bootstrap, 3-hop CREATE2/ntor/EXTEND2 (incl. CGO path), exit streams,
 > SOCKS5H, and HS v3 client/host hot paths work against the public network. Scanner snapshot:
-> **D0=0 · D1≈0 · majority D2 · ~11 D3** — not full C Tor parity.
+> **L1: D3≈213 · D2=0 · N/A≈166**; global still **majority D2** across L2–L4 — not full C Tor parity.
 
 ## Engine identity
 
@@ -34,6 +34,9 @@ control-spec subset, SOCKS5H).
 | `:proxy` | SOCKS5(H) (+ DNSPort placeholder) |
 | `:cli` | `kotlin-tor` daemon / bootstrap CLI |
 | `:android` | Embeddable AAR (`KotlinTorEngine`) for OnionVPN |
+| `:demo-common` | Shared demo feature runners (`DemoSession` / `DemoFeatures`) — extras |
+| `:demo-android` | Material 3 Android demo shell (+ VPN) — extras |
+| `:demo-desktop` | Compose Desktop Material 3 demo shell — extras |
 | `:integration-tests` | Live-network tests (opt-in) |
 
 ## Requirements
@@ -84,6 +87,27 @@ engine.start(
 ```
 
 OnionVPN integration: add engine id `KOTLIN_TOR` beside C Tor / Arti (separate app PR).
+
+## Demo shells (extras)
+
+Opt-in modules (omit from OnionVPN `includeBuild` by default):
+
+```bash
+./gradlew :demo-android:assembleDebug -Pkotlin.tor.extras=true
+./gradlew :demo-desktop:createDistributable -Pkotlin.tor.extras=true
+# Full-tunnel VPN needs CAP_NET_ADMIN — do not use sudo ./gradlew (JAVA_HOME is stripped):
+sudo ./bin/kotlin-tor-demo
+# or: sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" ./bin/kotlin-tor-demo
+```
+
+- `:demo-common` — JVM feature runners shared by both GUIs (incl. Linux `DesktopVpnSession`)
+- `:demo-android` — clean Material 3 shell; VPN / TUN via `VpnService` + OnionTunnel
+- `:demo-desktop` — Compose Desktop Material 3; **Linux full-tunnel** VPN (`/dev/net/tun` + SO_MARK; needs `CAP_NET_ADMIN`)
+- `:cli` — headless daemon / debug (not a GUI)
+
+Desktop VPN excludes **only Tor OR/PT uplink** sockets from the tunnel (SO_MARK + policy routing). Not anonymity-certified; SNAPSHOT.
+
+Packaged binary: `demo-desktop/build/compose/binaries/main/app/kotlin-tor-demo/` (launcher wrapper: [`bin/kotlin-tor-demo`](bin/kotlin-tor-demo)).
 
 ## Specs
 

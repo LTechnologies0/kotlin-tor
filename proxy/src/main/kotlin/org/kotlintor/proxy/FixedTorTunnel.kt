@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import org.kotlintor.TorClient
 import org.kotlintor.config.ListenSpec
 import org.kotlintor.link.ConnectionTable
@@ -30,6 +31,7 @@ class FixedTorTunnel(
     private val isolationPrefix: String = "app",
     private val peekBytes: Int = 16,
     private val onPeek: ((ProtocolPeek.Kind) -> Unit)? = null,
+    private val maxConcurrent: Int = ProxyAcceptLimits.DEFAULT_TCP,
 ) {
     constructor(
         client: TorClient,
@@ -39,11 +41,22 @@ class FixedTorTunnel(
         isolationPrefix: String = "app",
         peekBytes: Int = 16,
         onPeek: ((ProtocolPeek.Kind) -> Unit)? = null,
-    ) : this(TorClientDialer(client), scope, remoteHost, remotePort, isolationPrefix, peekBytes, onPeek)
+        maxConcurrent: Int = ProxyAcceptLimits.DEFAULT_TCP,
+    ) : this(
+        TorClientDialer(client),
+        scope,
+        remoteHost,
+        remotePort,
+        isolationPrefix,
+        peekBytes,
+        onPeek,
+        maxConcurrent,
+    )
 
     private var job: Job? = null
     private var server: ServerSocket? = null
     private var listenerHandle: ListenerConnection? = null
+    private val gate: Semaphore = ProxyAcceptLimits.semaphore(maxConcurrent)
 
     fun start(listen: ListenSpec) {
         val ss = ServerSocket()
@@ -55,7 +68,17 @@ class FixedTorTunnel(
         job = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val sock = runCatching { ss.accept() }.getOrNull() ?: break
-                launch { handle(sock) }
+                if (!gate.tryAcquire()) {
+                    runCatching { sock.close() }
+                    continue
+                }
+                launch {
+                    try {
+                        handle(sock)
+                    } finally {
+                        gate.release()
+                    }
+                }
             }
         }
     }

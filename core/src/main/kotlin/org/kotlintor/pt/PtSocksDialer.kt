@@ -21,7 +21,15 @@ object PtSocksDialer {
     ): Socket {
         val sock = Socket()
         if (protect) {
-            org.kotlintor.os.PlatformNatives.protectSocket(sock)
+            if (!sock.isBound && org.kotlintor.os.PlatformNatives.hasSocketProtector()) {
+                runCatching { sock.bind(InetSocketAddress(0)) }
+            }
+            val ok = org.kotlintor.os.PlatformNatives.protectSocket(sock)
+            if (!ok && org.kotlintor.os.PlatformNatives.hasSocketProtector()) {
+                runCatching { sock.close() }
+                error("VPN protect failed before PT SOCKS dial — refusing clearnet/TUN-loop dial" +
+                    (org.kotlintor.os.PlatformNatives.lastProtectFailure?.let { " ($it)" }.orEmpty()))
+            }
         }
         sock.connect(InetSocketAddress(socksHost, socksPort), connectTimeoutMs)
         sock.soTimeout = connectTimeoutMs

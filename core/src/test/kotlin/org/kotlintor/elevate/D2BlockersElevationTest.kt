@@ -20,8 +20,9 @@ import java.nio.file.Path
 class D2BlockersElevationTest {
     @Test
     fun `scheduler prefers kist then lite`() {
+        // Full KIST is opt-in; without KOTLIN_TOR_KIST_PYTHON, skip to VANILLA.
         assertEquals(
-            SchedulerType.KIST,
+            SchedulerType.VANILLA,
             ChannelScheduler.select(listOf(SchedulerType.KIST, SchedulerType.VANILLA)),
         )
         assertEquals(

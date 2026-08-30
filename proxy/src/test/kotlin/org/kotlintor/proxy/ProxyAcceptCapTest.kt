@@ -79,6 +79,71 @@ class ProxyAcceptCapTest {
     }
 
     @Test
+    fun `TransparentProxy closes excess when maxConcurrent is 1`() = runBlocking {
+        ConnectionTable.clear()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val trans = TransparentProxy(SlowDialer(), scope, maxConcurrent = 1, originalDst = { null })
+        try {
+            trans.start(ListenSpec("127.0.0.1", 0))
+            delay(50)
+            val port = trans.boundPort()
+            assertTrue(port > 0)
+            Socket("127.0.0.1", port).use { first ->
+                Thread.sleep(50)
+                val second = Socket()
+                second.connect(java.net.InetSocketAddress("127.0.0.1", port), 500)
+                Thread.sleep(100)
+                val stillOpen = runCatching {
+                    second.getOutputStream().write(1)
+                    second.getOutputStream().flush()
+                    true
+                }.getOrDefault(false)
+                runCatching { second.close() }
+                assertTrue(!stillOpen || first.isConnected)
+            }
+        } finally {
+            trans.stop()
+            scope.cancel()
+            ConnectionTable.clear()
+        }
+    }
+
+    @Test
+    fun `FixedTorTunnel closes excess when maxConcurrent is 1`() = runBlocking {
+        ConnectionTable.clear()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val tunnel = FixedTorTunnel(
+            SlowDialer(),
+            scope,
+            remoteHost = "127.0.0.1",
+            remotePort = 9,
+            maxConcurrent = 1,
+        )
+        try {
+            tunnel.start(ListenSpec("127.0.0.1", 0))
+            delay(50)
+            assertTrue(tunnel.boundPort() > 0)
+            Socket("127.0.0.1", tunnel.boundPort()).use { first ->
+                Thread.sleep(50)
+                val second = Socket()
+                second.connect(java.net.InetSocketAddress("127.0.0.1", tunnel.boundPort()), 500)
+                Thread.sleep(100)
+                val stillOpen = runCatching {
+                    second.getOutputStream().write(1)
+                    second.getOutputStream().flush()
+                    true
+                }.getOrDefault(false)
+                runCatching { second.close() }
+                assertTrue(!stillOpen || first.isConnected)
+            }
+        } finally {
+            tunnel.stop()
+            scope.cancel()
+            ConnectionTable.clear()
+        }
+    }
+
+    @Test
     fun `HttpConnectProxy respects maxConcurrent close`() = runBlocking {
         ConnectionTable.clear()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

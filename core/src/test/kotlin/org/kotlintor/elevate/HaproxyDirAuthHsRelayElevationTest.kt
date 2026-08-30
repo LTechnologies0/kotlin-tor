@@ -62,8 +62,12 @@ class HaproxyDirAuthHsRelayElevationTest {
 
     @Test
     fun `control0 peek rejects obsolete framing`() {
-        assertTrue(Control0Peek.hasControl0Command(byteArrayOf(1, 0, 0)))
+        // C Tor: uint16 cmd at offset 2, network order, ≤ 0x14
+        assertTrue(Control0Peek.hasControl0Command(byteArrayOf(0, 0, 0, 1)))
+        assertTrue(Control0Peek.hasControl0Command(byteArrayOf(0, 0, 0, 0x14)))
+        assertFalse(Control0Peek.hasControl0Command(byteArrayOf(0, 0, 0, 0x15)))
         assertFalse(Control0Peek.hasControl0Command(byteArrayOf('G'.code.toByte())))
+        assertFalse(Control0Peek.hasControl0Command("GETINFO".toByteArray()))
         assertTrue(Control0Peek.rejectReason().contains("control"))
     }
 

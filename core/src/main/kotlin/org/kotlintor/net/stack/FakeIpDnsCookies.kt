@@ -6,7 +6,7 @@ import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Onionmasq-class DNS fake-IP cookie maps (lite).
+ * Onionmasq-class DNS fake-IP cookie maps.
  *
  * - IPv4 cookies in `10.0.0.0/8`
  * - IPv6 cookies in `fec0::/10` (legacy site-local; not globally routable)

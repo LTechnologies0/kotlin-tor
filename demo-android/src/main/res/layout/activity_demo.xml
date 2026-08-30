@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/shellRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="horizontal">
+
+    <com.google.android.material.navigationrail.NavigationRailView
+        android:id="@+id/navRail"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        app:headerLayout="@layout/nav_header"
+        app:labelVisibilityMode="labeled"
+        app:menu="@menu/nav_drawer" />
+
+    <androidx.drawerlayout.widget.DrawerLayout
+        android:id="@+id/drawerLayout"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1">
+
+        <androidx.coordinatorlayout.widget.CoordinatorLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <com.google.android.material.appbar.AppBarLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fitsSystemWindows="true"
+                app:elevation="0dp">
+
+                <com.google.android.material.appbar.MaterialToolbar
+                    android:id="@+id/toolbar"
+                    android:layout_width="match_parent"
+                    android:layout_height="?attr/actionBarSize"
+                    android:background="?attr/colorSurface"
+                    app:navigationIcon="@drawable/ic_menu"
+                    app:navigationContentDescription="@string/open_drawer"
+                    app:title="@string/app_name" />
+            </com.google.android.material.appbar.AppBarLayout>
+
+            <FrameLayout
+                android:id="@+id/contentHost"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_marginTop="?attr/actionBarSize"
+                app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+                <include
+                    android:id="@+id/panelHome"
+                    layout="@layout/panel_home" />
+
+                <include
+                    android:id="@+id/panelProxies"
+                    layout="@layout/panel_proxies"
+                    android:visibility="gone" />
+
+                <include
+                    android:id="@+id/panelVpn"
+                    layout="@layout/panel_vpn"
+                    android:visibility="gone" />
+
+                <include
+                    android:id="@+id/panelDns"
+                    layout="@layout/panel_dns"
+                    android:visibility="gone" />
+
+                <include
+                    android:id="@+id/panelCircuits"
+                    layout="@layout/panel_circuits"
+                    android:visibility="gone" />
+
+                <include
+                    android:id="@+id/panelOnion"
+                    layout="@layout/panel_onion"
+                    android:visibility="gone" />
+
+                <include
+                    android:id="@+id/panelControl"
+                    layout="@layout/panel_control"
+                    android:visibility="gone" />
+
+                <include
+                    android:id="@+id/panelLogs"
+                    layout="@layout/panel_logs"
+                    android:visibility="gone" />
+            </FrameLayout>
+        </androidx.coordinatorlayout.widget.CoordinatorLayout>
+
+        <com.google.android.material.navigation.NavigationView
+            android:id="@+id/navView"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:layout_gravity="start"
+            android:fitsSystemWindows="true"
+            app:headerLayout="@layout/nav_header"
+            app:menu="@menu/nav_drawer" />
+    </androidx.drawerlayout.widget.DrawerLayout>
+</LinearLayout>

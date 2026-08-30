@@ -178,20 +178,33 @@ private fun runKeygen(args: List<String>) {
 private fun loadConfig(args: List<String>): TorConfig {
     var torrc: Path? = null
     var data = Path.of("data")
+    var quiet = org.kotlintor.config.QuietLevel.NONE
     var i = 0
     while (i < args.size) {
         when (args[i]) {
             "-f", "--torrc", "--config" -> torrc = Path.of(args[++i])
             "--data" -> data = Path.of(args[++i])
+            "--quiet" -> quiet = org.kotlintor.config.QuietLevel.SILENT
+            "--hush" -> quiet = org.kotlintor.config.QuietLevel.HUSH
         }
         i++
     }
     Files.createDirectories(data)
-    return if (torrc != null && Files.exists(torrc)) {
+    org.kotlintor.config.QuietLevel.current = quiet
+    val base = if (torrc != null && Files.exists(torrc)) {
         TorrcParser.parse(Files.readString(torrc), data)
     } else {
         TorConfig(dataDirectory = data)
     }
+    return base.copy(
+        quietLevel = quiet,
+        logLevel = when (quiet) {
+            org.kotlintor.config.QuietLevel.NONE -> base.logLevel
+            org.kotlintor.config.QuietLevel.HUSH -> org.kotlintor.config.LogLevel.WARN
+            org.kotlintor.config.QuietLevel.SILENT ->
+                if (torrc != null) base.logLevel else org.kotlintor.config.LogLevel.ERR
+        },
+    )
 }
 
 private suspend fun runBootstrap(args: List<String>) {

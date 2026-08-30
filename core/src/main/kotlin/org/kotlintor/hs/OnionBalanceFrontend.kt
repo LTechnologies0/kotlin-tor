@@ -72,7 +72,7 @@ class OnionBalanceFrontend(
     }
 }
 
-/** Per-service INTRODUCE2 admission rate limit (HiddenServiceMaxStreams-style lite). */
+/** Per-service INTRODUCE2 admission rate limit (HiddenServiceMaxStreams-style). */
 class HsIntroRateLimit(
     private val maxPerMinute: Int = 200,
 ) {

@@ -5,8 +5,10 @@ import org.kotlintor.circuit.buildRelayCell
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Prop329 multipath DATA scheduling (lite): prefer lowest-RTT / primary leg,
- * fall back to secondary when primary is blocked by congestion.
+ * Prop329 multipath DATA scheduling (C Tor conflux scheduler path).
+ *
+ * Prefer lowest-RTT / primary leg; fall back to secondary when primary is
+ * blocked by congestion. Subsystem entry: [ConfluxSys].
  */
 class ConfluxScheduler(
     private val set: ConfluxSet,
@@ -29,11 +31,11 @@ class ConfluxScheduler(
         return circs[i]
     }
 
-    suspend fun sendLink(leg: Circuit, payload: Conflux.LinkPayload) {
+    suspend fun sendLink(leg: Circuit, payload: ConfluxCell.Link) {
         leg.sendRelay(buildRelayCell(RelayCommand.CONFLUX_LINK, 0, payload.encode()))
     }
 
-    suspend fun sendLinked(leg: Circuit, payload: Conflux.LinkPayload) {
+    suspend fun sendLinked(leg: Circuit, payload: ConfluxCell.Link) {
         leg.sendRelay(buildRelayCell(RelayCommand.CONFLUX_LINKED, 0, payload.encode()))
     }
 

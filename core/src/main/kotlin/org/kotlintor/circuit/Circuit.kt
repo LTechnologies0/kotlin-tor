@@ -43,6 +43,8 @@ class Circuit(
     private val created2 = Channel<Cell>(1)
     /** Classic fixed windows; swapped for [CongestionControl] when prop324 negotiates. */
     private var flow: CircWindows = ClassicWindows(CircuitFlowControl())
+    /** Digests of outbound DATA cells awaiting authenticated SENDME credit. */
+    private val circSendmeDigests = Sendme.DigestQueue()
     /** KH from the last hop's ntor (for ESTABLISH_INTRO). */
     var lastHopKh: ByteArray? = null
         private set
@@ -51,13 +53,17 @@ class Circuit(
         private set
 
     /**
-     * Send CC_FIELD_REQUEST on ntor-v3 CREATE/EXTEND (default on).
-     * When the hop replies with CC_FIELD_RESPONSE, [enableCongestionControl] runs.
+     * Send CC_FIELD_REQUEST on ntor-v3 CREATE/EXTEND.
+     * Default off until prop324 SENDME accounting is proven on live exits.
      */
-    var requestCongestionControl: Boolean = true
+    var requestCongestionControl: Boolean = false
 
-    /** Prefer CGO when every hop advertises Relay=5+6 (CircuitManager gates path). */
-    var requestCgo: Boolean = true
+    /**
+     * Prefer CGO when every hop advertises Relay=5+6 (CircuitManager gates path).
+     * Default off: multi-hop CGO builds circuits but stalls RELAY_DATA streams
+     * (CONNECTED works; SOCKS HTTP/TLS does not).
+     */
+    var requestCgo: Boolean = false
 
     /** True after a hop negotiated CGO; subsequent hops on this circuit should match. */
     var cgoNegotiated: Boolean = false
@@ -90,21 +96,23 @@ class Circuit(
     var pathBiasGuardFp: String? = null
 
     private interface CircWindows {
-        suspend fun beforeOutboundData()
+        suspend fun beforeOutboundData(): Boolean
         suspend fun onInboundData(digestAfterCell: ByteArray): ByteArray?
-        suspend fun onInboundSendme()
+        suspend fun onInboundSendme(payload: ByteArray, digests: Sendme.DigestQueue): Boolean
     }
 
     private class ClassicWindows(private val inner: CircuitFlowControl) : CircWindows {
         override suspend fun beforeOutboundData() = inner.beforeOutboundData()
         override suspend fun onInboundData(digestAfterCell: ByteArray) = inner.onInboundData(digestAfterCell)
-        override suspend fun onInboundSendme() = inner.onInboundSendme()
+        override suspend fun onInboundSendme(payload: ByteArray, digests: Sendme.DigestQueue) =
+            inner.onInboundSendme(payload, digests)
     }
 
     private class CcWindows(private val inner: CongestionControl) : CircWindows {
         override suspend fun beforeOutboundData() = inner.beforeOutboundData()
         override suspend fun onInboundData(digestAfterCell: ByteArray) = inner.onInboundData(digestAfterCell)
-        override suspend fun onInboundSendme() = inner.onInboundSendme()
+        override suspend fun onInboundSendme(payload: ByteArray, digests: Sendme.DigestQueue) =
+            inner.onInboundSendme(payload, digests)
     }
 
     /** Switch to prop324 Vegas windows (typically after ntor-v3 CC_FIELD_RESPONSE). */
@@ -145,7 +153,9 @@ class Circuit(
                                     introPad.onNegotiated(relay.data)
                                 }
                                 relay.command == RelayCommand.SENDME && relay.streamId == 0 -> {
-                                    flow.onInboundSendme()
+                                    if (!flow.onInboundSendme(relay.data, circSendmeDigests)) {
+                                        System.err.println("circuit $id: rejected unauthenticated SENDME")
+                                    }
                                 }
                                 relay.command == RelayCommand.DATA -> {
                                     val dig = layers.inboundDigestAt(hopIndex)
@@ -643,8 +653,11 @@ class Circuit(
         var offset = 0
         while (offset < data.size) {
             val n = minOf(498, data.size - offset)
-            flow.beforeOutboundData()
+            val recordDigest = flow.beforeOutboundData()
             sendRelay(buildRelayCell(RelayCommand.DATA, streamId, data.copyOfRange(offset, offset + n)))
+            if (recordDigest && layers.hopCount > 0) {
+                circSendmeDigests.record(layers.outboundDigestAtExit())
+            }
             offset += n
         }
     }
@@ -686,7 +699,7 @@ class Circuit(
 
     /**
      * True when the circuit is dirty (had streams) and has been unused longer than [unusedTimeoutMs]
-     * (prop368 unused-circuit timeout lite).
+     * (prop368 unused-circuit timeout subset).
      */
     fun isUnusedPast(unusedTimeoutMs: Long, nowMs: Long = System.currentTimeMillis()): Boolean {
         if (streams.isNotEmpty()) return false
@@ -694,7 +707,7 @@ class Circuit(
         return nowMs - since >= unusedTimeoutMs
     }
 
-    /** Refuse new streams after CircuitDirtyTimeout (prop368 dirty timeout lite). */
+    /** Refuse new streams after CircuitDirtyTimeout (prop368 dirty timeout subset). */
     fun isTooDirtyForAttach(dirtyTimeoutMs: Long, nowMs: Long = System.currentTimeMillis()): Boolean {
         val dirty = dirtySinceMs ?: return false
         return nowMs - dirty >= dirtyTimeoutMs
@@ -709,7 +722,7 @@ class Circuit(
 }
 
 private fun destroyReasonName(code: Int): String =
-    org.kotlintor.cell.Reasons.circuitEndToControl(code)
+    org.kotlintor.cell.Reasons.circuitEndToControlOrUnknown(code)
 
 class TorStream(
     val streamId: Int,
@@ -789,6 +802,9 @@ class CircuitManager(
     var outboundBindOr: String? = null
     /** ConstrainedSockets buffer size; null disables. */
     var constrainedSockSize: Int? = null
+    var tcpProxyHost: String? = null
+    var tcpProxyPort: Int? = null
+    var tcpProxyProtocol: String = "haproxy"
 
     fun applyConsensusParams(params: Map<String, Long>) {
         lastConsensusParams = params
@@ -844,6 +860,9 @@ class CircuitManager(
                 },
                 bindLocalHost = outboundBindOr,
                 constrainedSockSize = constrainedSockSize,
+                tcpProxyHost = tcpProxyHost,
+                tcpProxyPort = tcpProxyPort,
+                tcpProxyProtocol = tcpProxyProtocol,
             ).also {
                 it.writeBudget.type = org.kotlintor.link.ChannelScheduler.select(schedulerPreference)
                 it.channelPadding.enabled = connectionPaddingEnabled
@@ -873,16 +892,18 @@ class CircuitManager(
                 path.middle.supportsSubprotoNegotiate() && path.middle.supportsCgo() &&
                 path.exit.supportsSubprotoNegotiate() && path.exit.supportsCgo()
             circ.requestCgo = pathCgo
-            println(
-                "creating hop1 ${path.guard.nickname} (ntor-v3=${path.guard.supportsNtorV3()} " +
-                    "cc=${path.guard.supportsFlowCtrl2()} cgo=$pathCgo)...",
+            onCircEvent(
+                "CIRC $circId BUILDING HOP=1 NODE=${path.guard.nickname} " +
+                    "NTOR_V3=${path.guard.supportsNtorV3()} CC=${path.guard.supportsFlowCtrl2()} CGO=$pathCgo",
             )
             circ.createFirstHop(path.guard, guardKeys)
-            println("hop1 OK; extending to ${path.middle.nickname} (ntor-v3=${path.middle.supportsNtorV3()})...")
+            onCircEvent(
+                "CIRC $circId BUILDING HOP=2 NODE=${path.middle.nickname} " +
+                    "NTOR_V3=${path.middle.supportsNtorV3()}",
+            )
             circ.extend(path.middle, middleKeys)
-            println("hop2 OK; extending to ${path.exit.nickname}...")
+            onCircEvent("CIRC $circId BUILDING HOP=3 NODE=${path.exit.nickname}")
             circ.extend(path.exit, exitKeys)
-            println("hop3 OK")
             val elapsed = System.currentTimeMillis() - started
             pathBias.markBuildSucceeded(circId, guardFp)
             circuitBuildTimeout.addSuccess(elapsed)
@@ -918,6 +939,9 @@ class CircuitManager(
                 scope,
                 bindLocalHost = outboundBindOr,
                 constrainedSockSize = constrainedSockSize,
+                tcpProxyHost = tcpProxyHost,
+                tcpProxyPort = tcpProxyPort,
+                tcpProxyProtocol = tcpProxyProtocol,
             ).also {
                 it.writeBudget.type = org.kotlintor.link.ChannelScheduler.select(schedulerPreference)
                 it.connect(expectedIdentityHex = relay.fingerprintHex)

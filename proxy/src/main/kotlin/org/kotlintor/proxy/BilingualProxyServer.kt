@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import org.kotlintor.TorClient
 import org.kotlintor.config.ListenSpec
 import org.kotlintor.link.ConnectionTable
@@ -37,17 +38,20 @@ class BilingualProxyServer(
     private val scope: CoroutineScope,
     private val optimisticData: Boolean = true,
     private val bytesPerSecond: Long = 0,
+    private val maxConcurrent: Int = ProxyAcceptLimits.DEFAULT_TCP,
 ) {
     constructor(
         client: TorClient,
         scope: CoroutineScope,
         optimisticData: Boolean = true,
         bytesPerSecond: Long = 0,
-    ) : this(TorClientDialer(client), scope, optimisticData, bytesPerSecond)
+        maxConcurrent: Int = ProxyAcceptLimits.DEFAULT_TCP,
+    ) : this(TorClientDialer(client), scope, optimisticData, bytesPerSecond, maxConcurrent)
 
     private var job: Job? = null
     private var server: ServerSocket? = null
     private var listenerHandle: ListenerConnection? = null
+    private val gate: Semaphore = ProxyAcceptLimits.semaphore(maxConcurrent)
 
     fun start(listen: ListenSpec) {
         val ss = ServerSocket()
@@ -59,7 +63,17 @@ class BilingualProxyServer(
         job = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val sock = runCatching { ss.accept() }.getOrNull() ?: break
-                launch { handle(sock) }
+                if (!gate.tryAcquire()) {
+                    runCatching { sock.close() }
+                    continue
+                }
+                launch {
+                    try {
+                        handle(sock)
+                    } finally {
+                        gate.release()
+                    }
+                }
             }
         }
     }

@@ -138,7 +138,7 @@ class ListenerConnection(
     val listenType: ConnectionType,
 ) : Connection(id, ConnectionType.LISTENER, bindHost, bindPort)
 
-/** Safe downcasts (C Tor `TO_OR_CONN` / `TO_EDGE_CONN` lite). */
+/** Safe downcasts (C Tor `TO_OR_CONN` / `TO_EDGE_CONN`). */
 object ConnectionCast {
     fun toOr(c: Connection?): OrConnectionHandle? = c as? OrConnectionHandle
     fun toExit(c: Connection?): ExitConnectionHandle? = c as? ExitConnectionHandle
@@ -150,7 +150,7 @@ object ConnectionCast {
 }
 
 /**
- * Global connection table (C Tor `connection_array` lite).
+ * Global connection table (C Tor `connection_array`).
  */
 object ConnectionTable {
     private val nextId = AtomicLong(1)

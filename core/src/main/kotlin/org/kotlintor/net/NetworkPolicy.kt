@@ -5,9 +5,10 @@ import java.net.InetSocketAddress
 import java.net.Socket
 
 /**
- * FascistFirewall / Reachable* / FirewallPorts policy (C Tor `policies.c` lite).
+ * FascistFirewall / Reachable* / FirewallPorts policy (C Tor `policies.c`).
  *
  * Patterns: `*`, `*:port`, `*:port-port`, `addr`, `addr:port`, `addr:*`, CIDR `a.b.c.d/n:ports`.
+ * Naming-aligned entry: [Policies].
  */
 class AddrPolicy(private val rules: List<Rule>) {
     data class Rule(
@@ -128,7 +129,7 @@ class AddrPolicy(private val rules: List<Rule>) {
 }
 
 /**
- * OutboundBindAddress* helpers (C Tor `get_configured_bridge` / connection bind lite).
+ * OutboundBindAddress* helpers (C Tor bind-before-connect path).
  */
 object OutboundBind {
     fun bindBeforeConnect(sock: Socket, localHost: String?) {
@@ -149,10 +150,58 @@ object OutboundBind {
         /** ConstrainedSockets buffer size; null/≤0 skips. */
         constrainedSockSize: Int? = null,
         protect: Boolean = true,
+        /**
+         * Optional TCPProxy host:port — connect there first, then inject PROXY
+         * header toward [remoteHost]:[remotePort] when [tcpProxyProtocol] is haproxy.
+         */
+        tcpProxyHost: String? = null,
+        tcpProxyPort: Int? = null,
+        tcpProxyProtocol: String = "haproxy",
+    ): Socket {
+        if (!tcpProxyHost.isNullOrBlank() && tcpProxyPort != null && tcpProxyPort > 0) {
+            val sock = connectDirect(
+                tcpProxyHost,
+                tcpProxyPort,
+                bindHost,
+                timeoutMs,
+                constrainedSockSize,
+                protect,
+            )
+            if (tcpProxyProtocol.equals("haproxy", ignoreCase = true)) {
+                HaproxyProxyHeader.injectAfterConnect(sock, remoteHost, remotePort)
+            }
+            return sock
+        }
+        return connectDirect(
+            remoteHost,
+            remotePort,
+            bindHost,
+            timeoutMs,
+            constrainedSockSize,
+            protect,
+        )
+    }
+
+    private fun connectDirect(
+        remoteHost: String,
+        remotePort: Int,
+        bindHost: String?,
+        timeoutMs: Int,
+        constrainedSockSize: Int?,
+        protect: Boolean,
     ): Socket {
         val sock = Socket()
         if (protect) {
-            org.kotlintor.os.PlatformNatives.protectSocket(sock)
+            // Allocate a local FD before SYN so SO_MARK / VpnService.protect can apply.
+            if (!sock.isBound && org.kotlintor.os.PlatformNatives.hasSocketProtector()) {
+                runCatching { sock.bind(InetSocketAddress(0)) }
+            }
+            val ok = org.kotlintor.os.PlatformNatives.protectSocket(sock)
+            if (!ok && org.kotlintor.os.PlatformNatives.hasSocketProtector()) {
+                runCatching { sock.close() }
+                val detail = org.kotlintor.os.PlatformNatives.lastProtectFailure?.let { " ($it)" }.orEmpty()
+                error("VPN protect failed before OR connect — refusing clearnet/TUN-loop dial$detail")
+            }
         }
         bindBeforeConnect(sock, bindHost)
         if (constrainedSockSize != null && constrainedSockSize > 0) {
@@ -168,7 +217,7 @@ object OutboundBind {
 }
 
 /**
- * SafeSocks / WarnUnsafeSocks / TestSocks (C Tor socks policy lite).
+ * SafeSocks / WarnUnsafeSocks / TestSocks (C Tor socks policy helpers).
  * SafeSocks rejects IP-literal destinations (prefer hostname for DNS at exit).
  *
  * VPN / OnionTunnel profiles may set [allowIpLiterals] so fake-IP cookies and

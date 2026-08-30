@@ -1,20 +1,32 @@
 package org.kotlintor.hs
 
 import org.junit.jupiter.api.Assertions.assertArrayEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.kotlintor.crypto.Ed25519Keys
+import org.kotlintor.util.SecureRandomSource
 import java.time.Duration
 import java.time.Instant
 
 class HsClientAuthRoundTripTest {
     @Test
-    fun `seal open cookie`() {
+    fun `seal open cookie shake aes ctr`() {
         val client = HsClientAuth.generate("bob")
         val eph = org.kotlintor.crypto.Curve25519.generateKeyPair()
-        val (cookie, enc) = HsClientAuth.sealCookie(eph.privateKey, client.publicKey)
-        val opened = HsClientAuth.openCookie(client.privateKey, eph.publicKey, enc)
+        val subcred = SecureRandomSource.nextBytes(32)
+        val (cookie, entry) = HsClientAuth.sealCookie(subcred, eph.privateKey, client.publicKey)
+        val opened = HsClientAuth.openCookie(subcred, client.privateKey, eph.publicKey, entry)
+        assertNotNull(opened)
         assertArrayEquals(cookie, opened)
+        val wrong = HsClientAuth.openCookie(
+            SecureRandomSource.nextBytes(32),
+            client.privateKey,
+            eph.publicKey,
+            entry,
+        )
+        assertNull(wrong)
     }
 
     @Test

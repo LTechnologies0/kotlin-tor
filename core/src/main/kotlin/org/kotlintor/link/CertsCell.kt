@@ -38,21 +38,33 @@ object CertsCell {
             o += clen
             // 2 = RSA_ID_X509 legacy identity certificate
             // 1 = LINK_X509 (also RSA, signed by identity)
-            if (certType == 2 || certType == 1) {
+            if (certType == 2) {
+                val cert = try {
+                    cf.generateCertificate(ByteArrayInputStream(der)) as X509Certificate
+                } catch (e: Exception) {
+                    throw IllegalStateException("CERTS: failed to extract RSA identity (type 2)", e)
+                }
+                val fp = rsaFingerprint(cert)
+                fps += "2:${fp.toHex()}"
+                rsaId = fp
+            } else if (certType == 1) {
                 runCatching {
                     val cert = cf.generateCertificate(ByteArrayInputStream(der)) as X509Certificate
                     val fp = rsaFingerprint(cert)
-                    fps += "${certType}:${fp.toHex()}"
-                    if (certType == 2) rsaId = fp
-                    if (rsaId == null && certType == 1) rsaId = fp
+                    fps += "1:${fp.toHex()}"
+                    if (rsaId == null) rsaId = fp
                 }
             }
             // 4 = IDENTITY_V_SIGNING — extract KP_relayid_ed from signed-with extension
-            if (certType == 4 && der.size >= 42) {
-                runCatching {
+            if (certType == 4) {
+                if (der.size < 42) {
+                    throw IllegalStateException("CERTS: type-4 identity cert too short (${der.size})")
+                }
+                try {
                     // VERSION CERT_TYPE EXPIRATION CERT_KEY_TYPE CERTIFIED_KEY N_EXTENSIONS ...
                     var i = 7 + 32 // after certified key
                     val nExt = der[i++].toInt() and 0xff
+                    var foundEd = false
                     repeat(nExt) {
                         if (i + 4 > der.size) return@repeat
                         val extLen = ((der[i].toInt() and 0xff) shl 8) or (der[i + 1].toInt() and 0xff)
@@ -62,9 +74,17 @@ object CertsCell {
                         if (extType == 0x04 && extLen == 32) {
                             edId = der.copyOfRange(i, i + 32)
                             fps += "4:ed25519:${edId!!.toHex()}"
+                            foundEd = true
                         }
                         i += extLen
                     }
+                    if (!foundEd && edId == null) {
+                        throw IllegalStateException("CERTS: type-4 present but Ed25519 identity extension missing")
+                    }
+                } catch (e: IllegalStateException) {
+                    throw e
+                } catch (e: Exception) {
+                    throw IllegalStateException("CERTS: failed to extract Ed25519 identity (type 4)", e)
                 }
             }
             if (certType == 5) {

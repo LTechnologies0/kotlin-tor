@@ -1,94 +1,154 @@
 # Domain: null
 
-Scope: main Kotlin (`core` / `proxy` / `control` / `android` / `cli`). Focus: NPE on optional hop keys, consensus null, port `-1` / zero-port misuse, `!!`, nullable config on hot paths. Cap ~8.
+**Scope:** main Kotlin (`core` / `proxy` / `control` / `android` / `cli`).  
+**Focus:** `!!` assertions, unchecked Map gets, nullable engine/daemon after stop, race NPE on concurrent stop/start, Optional-like gaps, platform null from JNI/Android APIs, silent null meaning failure.  
+**Pass:** 2026-08-03 re-verify · mailbox `/tmp/ktor-safety-pass` (peers: return/memory/type/cpu/io/bounds).  
+**Cap:** ~8 Critical/High.
 
-## Critical / High summary
+## Status rollup
 
-| ID | Risk | One-liner |
-|----|------|-----------|
-| NUL-001 | High | Optional hop `ed25519Identity` → silent ntor-v3 downgrade / incomplete EXTEND linkspecs |
-| NUL-002 | High | `hopKeys[fp]!!` after `ensureHopKeys` (NPE if cache eviction / map race) |
-| NUL-003 | High | Nullable `consensus` read off-mutex; HS manager wired to `consensusOrNull()` |
-| NUL-004 | High | Port `-1` sentinels (engine getters + `protect(-1)`) treated as usable FDs/ports |
-| NUL-005 | High | HSDir HTTP fetch uses consensus `dirPort` (often `0`) → `host:0` URLs |
-| NUL-006 | High | `OrConnection` `input!!`/`output!!`/`socket!!` on OR send/read/handshake |
-| NUL-007 | High | Nullable `orPort`/`dirPort`/`address` → fabricated listen/publish defaults |
-| NUL-008 | High | Partial-start leaves non-null listener refs while siblings failed |
+| ID | Risk | Status | One-liner |
+|----|------|--------|-----------|
+| NUL-001 | High | **OPEN** | Optional hop `ed25519Identity` → silent ntor-v3 downgrade / omit LSTYPE=3 |
+| NUL-002 | High | **OPEN** | `hopKeys[fp]!!` after ensure — NPE under FIFO eviction / unsynchronized Map |
+| NUL-003 | High | **OPEN** | HS wired to `consensusOrNull()`; DoS apply no-ops on null; unlocked snapshot API |
+| NUL-004 | High | **OPEN** | Port `-1` sentinels + `protect(-1)` treated as usable FDs/ports |
+| NUL-005 | High | **OPEN** | HSDir HTTP uses consensus `dirPort` (often `0`) → `host:0` URLs |
+| NUL-006 | High | **OPEN** | `OrConnection` `input!!`/`output!!`/`socket!!` on OR send/read/handshake |
+| NUL-007 | High | **OPEN** | Nullable `orPort`/`dirPort`/`address` → fabricated listen/publish defaults |
+| NUL-008 | High | **FIXED** | Partial-start teardown nulls listeners + stops daemon (`teardownPartialStart`) |
 
-No Critical-only null finding beyond overlaps with **RET-001** / **FAIL-001** (partial start); strongest standalone null risks are High.
+**Counts:** FIXED **1** · OPEN **7** · NEW **0**  
+**Top 3 open:** NUL-002 · NUL-006 · NUL-004
+
+No standalone Critical-only null finding; strongest cluster is High. Partial-start Critical overlap closed via RET-001 (NUL-008). Residual stop↔start race ownership: **CF-002**.
 
 ---
 
-### [NUL-001] Optional hop ed25519 / ntor keys silently degrade CREATE/EXTEND
+### [NUL-001] Optional hop ed25519 / ntor keys silently degrade CREATE/EXTEND — **OPEN**
 - **Track**: null
-- **Evidence**: `core/.../circuit/Circuit.kt:25-28` (`HopKeys.ed25519Identity` nullable); `:193-199` / `:287-298` (use `keys.ed25519Identity ?: router.ed25519Identity`; if both null and `supportsNtorV3()`, fall through to classic ntor without ed linkspec); `dir/DescriptorParser.kt:5-6,57` (ed optional); `dir/Consensus.kt:37-38` (`RouterStatus.ntorOnionKey` / `ed25519Identity` nullable); `hs/OnionClient.kt:145,164-165`; `hs/OnionService.kt:342` (rend hop may lack ed)
-- **Risk**: High
-- **Fix**: Fail closed when Relay≥4 path needs ed but identity missing; never silently omit LSTYPE=3; treat missing ntor onion key as hard error before dial (do not build `ExtendInfo` with null `curve25519OnionKey` for multi-hop)
-- **Related**: TYP-002, CRY (handshake), MEM-002 (key cache)
+- **Status**: OPEN
+- **Evidence**:
+  - `circuit/Circuit.kt:25-28` — `HopKeys.ed25519Identity` nullable
+  - `:197-203` / `:291-303` — `keys.ed25519Identity ?: router.ed25519Identity`; if both null and peer `supportsNtorV3()`, fall through to classic ntor **without** ed linkspec
+  - `dir/Consensus.kt` / `DescriptorParser` — `ntorOnionKey` / `ed25519Identity` optional on status/desc
+  - `hs/OnionClient.kt:145+`, `OnionService.kt` rend hop may lack ed
+- **Risk**: High (silent crypto/protocol downgrade; incomplete EXTEND linkspecs)
+- **Fix**: Fail closed when Relay≥4 / ntor-v3 path needs ed but identity missing; never silently omit LSTYPE=3; missing ntor onion key = hard error before dial
+- **Related**: CRY handshake, MEM-002 (key cache), TYP
 
-### [NUL-002] `hopKeys[fp]!!` after ensure on client / HS ensure callback
+### [NUL-002] `hopKeys[fp]!!` after ensure — **OPEN** (amplified)
 - **Track**: null
-- **Evidence**: `core/.../TorClient.kt:107-109` (`ensureHopKeys` then `hopKeys[fp]!!` for `OnionClient`); `:372-379` (`ensureHopKeys` puts under `fp`, but may accept `docs.values.firstOrNull()` when FP mismatch); `:414-416` (`hopKeysFor` → `!!`)
-- **Risk**: High (NPE once hopKeys eviction / concurrent clear lands; wrong-descriptor put still leaves `!!` “succeeding” with stale semantics)
-- **Fix**: Make `ensureHopKeys` return `HopKeys`; drop `!!`; refuse descriptor whose fingerprint ≠ requested `fp`
-- **Related**: TYP-002, MEM-002, CF-003
+- **Status**: OPEN
+- **Evidence**:
+  - `TorClient.kt:108-110` — OnionClient callback: `ensureHopKeys(fp)` then `hopKeys[fp]!!` (no mutex)
+  - `:374-385` — `ensureHopKeys` puts then FIFO-evicts when `size > MAX_HOP_KEYS` (512); may accept `docs.values.firstOrNull()` on FP mismatch
+  - `:428-430` — `hopKeysFor` → ensure then `!!`
+  - `hopKeys` is `linkedMapOf` (not concurrent); onion path releases client mutex before HS work (`:217-219`)
+  - **MEM-002 FIXED** made eviction real → `!!` NPE **more** likely under descriptor churn
+- **Risk**: High (NPE; wrong-descriptor put still “succeeds” with stale semantics)
+- **Fix**: `ensureHopKeys(): HopKeys` return value under same lock as eviction; drop `!!`; refuse descriptor whose fingerprint ≠ requested `fp`
+- **Related**: TYP-008, MEM-002 FIXED residual, MEM-010, CF map races
 
-### [NUL-003] Nullable consensus on hot path / HS wiring
+### [NUL-003] Nullable consensus on HS / unlocked snapshot — **OPEN**
 - **Track**: null
-- **Evidence**: `TorClient.kt:95` (`private var consensus: Consensus? = null`); `:217` (onion `connect` reads under `mutex`); `:290`, `:307`, `:321+` (`circuitForIsolation` / descriptor APIs read `consensus` **without** mutex); `:408` (`consensusOrNull()`); `TorDaemon.kt:258` (`onionServices.consensus = { client.consensusOrNull() }`); `hs/OnionService.kt:132-133`, `:177`, `:250`, `:410` (`consensus?.invoke() ?: error(...)`); `:259` (`HsDosDefense.applyConsensus(consensus?.invoke())` — null no-ops DoS param refresh)
-- **Risk**: High
-- **Fix**: Single mutex-/atomic snapshot for all consensus reads; HS `startAll` must await bootstrap (non-null consensus) before intro/publish; pass `Consensus` not `Consensus?` into DoS apply after gate
-- **Related**: CF-003, FAIL (bootstrap ordering)
+- **Status**: OPEN (partial mitigation on SOCKS path only)
+- **Evidence**:
+  - `TorClient.kt:96` — `private var consensus: Consensus? = null`
+  - `:218` — onion `connect` reads under `mutex` (good)
+  - `:221-228` / `:234` — clearnet `connect`/`resolve` hold mutex around `circuitForIsolation` (consensus read gated)
+  - `:422` — `consensusOrNull()` unlocked
+  - `TorDaemon.kt:258` — `onionServices.consensus = { client.consensusOrNull() }`
+  - `hs/OnionService.kt:177`, `:250`, `:410` — `consensus?.invoke() ?: error(...)` (fail if unset callback; still races bootstrap null)
+  - `:259` — `HsDosDefense.applyConsensus(consensus?.invoke())` — **null silently no-ops** DoS param refresh
+- **Risk**: High (HS start/publish vs bootstrap; DoS defense stays default when consensus absent)
+- **Fix**: Atomic/`mutex` snapshot for all consensus reads; HS `startAll` await non-null consensus before intro/publish; pass `Consensus` (non-null) into DoS apply after gate
+- **Related**: CF bootstrap ordering, FAIL-002, RET Conflicts (stale “NUL-003” = teardown — that is **NUL-008**)
 
-### [NUL-004] Port / FD `-1` sentinel misuse
+### [NUL-004] Port / FD `-1` sentinel misuse — **OPEN**
 - **Track**: null
-- **Evidence**: `android/.../KotlinTorEngine.kt:55-60` (`socksPort`/`dnsPortBound`/`controlPort`/… → `-1` when unbound); `os/PlatformNatives.kt:222-234` (`protectSocket` calls `protector(-1)` when FD unavailable, returns `false`); `config/TorConfig.kt:340-348` (`ListenSpec.parse` → `toInt()` accepts negative port strings); `dir/DescriptorPublisher.kt:39` / `DirAuthVoteGossip.kt:149` (HTTP `code = -1` on I/O error — sentinel overload)
-- **Risk**: High (UI/VPN may dial or `VpnService.protect(-1)`; negative ListenSpec binds fail oddly or confuse callers)
-- **Fix**: Prefer `Int?` / `boundPortOrNull()`; never pass `-1` to protect (no-op + fail-closed dial — align RET-002); reject `port <= 0` in `ListenSpec.parse` except documented `auto`/`0`; keep HTTP error code separate from listen ports
-- **Related**: RET-002, MEM-006, demo-ui (prior NUL-001)
+- **Status**: OPEN
+- **Evidence**:
+  - `android/.../KotlinTorEngine.kt:56-61` — `socksPort`/`dnsPortBound`/`controlPort`/… → `-1` when unbound/stopped
+  - `os/PlatformNatives.kt:226-234` — `protectSocket` invokes `protector(-1)` when FD unavailable, returns `false`
+  - `config/TorConfig.kt` `ListenSpec.parse` — `toInt()` accepts negative port strings (TYP-001 / INT-004)
+  - `dir/DescriptorPublisher.kt:39` — HTTP `code = -1` on I/O error (sentinel overload)
+- **Risk**: High (UI/VPN dial or `VpnService.protect(-1)`; callers treat `-1` as live port)
+- **Fix**: Prefer `Int?` / `boundPortOrNull()`; never pass `-1` to protect (align RET-002 fail-closed); reject `port < 0` in parse; keep HTTP error codes separate from listen ports
+- **Related**: RET-002 OPEN, MEM-006 FIXED, TYP-005 roleSocks `-1`
 
-### [NUL-005] Consensus `dirPort == 0` used as HTTP directory URL
+### [NUL-005] Consensus `dirPort == 0` used as HTTP directory URL — **OPEN**
 - **Track**: null
-- **Evidence**: `hs/HsDirClient.kt:118-120` (`http://${dir.ip}:${dir.dirPort}/tor/hs/3/$id` for every selected HSDir); `dir/Consensus.kt:31-32` (`dirPort: Int` — commonly `0` when relay has no DirPort); clearnet dir clients similarly: `DirectoryClient.kt:39+`, `DescriptorPublisher.kt:21`
-- **Risk**: High (HS descriptor fetch attempts `*:0`, burns timeouts, weakens HS availability)
-- **Fix**: Skip relays with `dirPort <= 0` for HTTP dir; use BEGIN_DIR over ORPort when DirPort absent (C Tor path); assert `port in 1..65535` before URL build
-- **Related**: IO (clearnet dir), HS client path
+- **Status**: OPEN
+- **Evidence**:
+  - `hs/HsDirClient.kt:118-120` — `http://${dir.ip}:${dir.dirPort}/tor/hs/3/$id` for every selected HSDir
+  - `dir/Consensus.kt` — `dirPort: Int` commonly `0` when relay has no DirPort
+  - Clearnet: `DirectoryClient.kt:41+`, `DescriptorPublisher.kt:21`
+- **Risk**: High (HS fetch `*:0`, timeout burn, weak HS availability)
+- **Fix**: Skip `dirPort <= 0` for HTTP dir; use BEGIN_DIR over ORPort when DirPort absent; assert `port in 1..65535` before URL build
+- **Related**: IO dir path, HS client
 
-### [NUL-006] `OrConnection` force-unwraps nullable socket streams
+### [NUL-006] `OrConnection` force-unwraps nullable socket streams — **OPEN**
 - **Track**: null
-- **Evidence**: `link/OrConnection.kt:60-62` (`socket`/`input`/`output` nullable); `:228` (`CellCodec.read(input!!, …)` handshake); `:341` (`socket!!.localAddress` NETINFO); `:363` (read loop `input!!`); `:425-426`, `:480-481` (`output!!.write` / `flush`)
-- **Risk**: High (NPE crash on OR hot path if send/read after close, failed connect, or racing `stop`)
-- **Fix**: Local non-null vals after successful `connect`; `send`/`readLoop` check `isOpen` and return/throw typed closed error; null fields under write mutex on close
-- **Related**: IO-007, CF cancel/teardown, RET-001
+- **Status**: OPEN
+- **Evidence**:
+  - `link/OrConnection.kt:60-62` — `socket`/`input`/`output` nullable
+  - `:228` — handshake `CellCodec.read(input!!, …)`
+  - `:341` — `socket!!.localAddress` NETINFO
+  - `:363` — read loop `input!!`
+  - `:424-425`, `:479-480` — `output!!.write` / `flush`
+- **Risk**: High (NPE on OR hot path after close, failed connect, or racing `stop`/cancel)
+- **Fix**: Local non-null vals after successful `connect`; `send`/`readLoop` check open and throw typed closed; null fields under write mutex on close
+- **Related**: IO-007, CF-002 teardown, RET-001, CPU-003 write path
 
-### [NUL-007] Nullable listen/config fields on daemon & relay publish path
+### [NUL-007] Nullable listen/config fields on daemon & relay publish — **OPEN**
 - **Track**: null
-- **Evidence**: `config/TorConfig.kt:20-23`, `:67` (`orPort`/`dirPort`/`metricsPort`/`address` nullable); `TorDaemon.kt:270-271` (`dirPort?.host ?: "127.0.0.1"`, `dirPort?.port ?: 9030` when minting authority cert — fabricates DirPort); `relay/RelayService.kt:191-197` (`orPort ?: return`; `dirPort?.port ?: 0` written into descriptor); `:229-234` (similar); `pt/PtServerManager.kt:37` (`config.orPort ?: config.extOrPort`)
-- **Risk**: High (mis-published OR/Dir endpoints; dirauth cert lies about listen; PT may start with null OR)
-- **Fix**: Require explicit `ORPort`/`DirPort` before auth/relay publish; no silent `9030`; treat missing address as config error not `127.0.0.1`
-- **Related**: IO-005 bind policy, FAIL config validation
+- **Status**: OPEN
+- **Evidence**:
+  - `config/TorConfig.kt:20-23` — `orPort`/`dirPort`/`metricsPort`/`address` nullable
+  - `TorDaemon.kt:270-271` — auth cert mint: `dirPort?.host ?: "127.0.0.1"`, `dirPort?.port ?: 9030`
+  - `relay/RelayService.kt:191-197` — `orPort ?: return`; `dirPort?.port ?: 0` into descriptor; `address ?: or.host`
+  - `pt/PtServerManager.kt` — `config.orPort ?: config.extOrPort`
+- **Risk**: High (mis-published OR/Dir endpoints; dirauth cert lies about listen)
+- **Fix**: Require explicit ORPort/DirPort before auth/relay publish; no silent `9030`/`127.0.0.1`
+- **Related**: IO-005, FAIL config validation, CRY-002 bind/auth
 
-### [NUL-008] Partial-start leaves inconsistent non-null listener refs
+### [NUL-008] Partial-start leaves inconsistent non-null listener refs — **FIXED**
 - **Track**: null
-- **Evidence**: `android/.../KotlinTorEngine.kt:99-143` (`running=true` then sequential assigns to `socks` / `roleSocks` / `dnsPort` / …); failure path historically cleared `running` without nulling already-started listeners (see RET-001)
-- **Risk**: High
-- **Fix**: Covered by RET-001 teardown — clear **all** listener refs to null and stop siblings before `onError`
-- **Related**: RET-001, FAIL-001, CF-001, MEM-006/007
+- **Status**: FIXED (Phase B / RET-001 / SAFETY_AUDIT)
+- **Evidence (current)**:
+  - `KotlinTorEngine.kt:147-155` — catch → `teardownPartialStart()` then clear `running`/`bootstrapped`
+  - `:159-170` — `stop()` teardown + clear `PlatformNatives.socketProtector` + `scope.cancel`
+  - `:192-205` — stops `socks` / `roleSocks` / `dnsPort` / `httpConnect` / `control`, nulls refs, `daemon.stop()`
+  - `:184-188` — `ensureScope()` recreates scope + `TorDaemon` after cancel
+- **Residual (not re-opened)**: Concurrent stop↔start still **CF-002** (late assigns vs teardown nulls). `bootstrapped` early set = FAIL-002, not missing null teardown.
+- **Related**: RET-001 FIXED, FAIL-001 (peer docs may lag), CF-002 OPEN, MEM-006/007
 
 ---
 
 ## Conflicts
 
-Cross-checks against other `docs/safety/domains/*.md`:
+### Static
 
 | Clash | Domains | Note |
 | --- | --- | --- |
-| `hopKeys!!` vs cache eviction | NUL-002, TYP-002, MEM-002, CF-003 | **Return** `HopKeys` from ensure under same `mutex` as eviction; never `!!` after map get. Evict only unused FPs. |
-| Consensus snapshot vs map mutex | NUL-003, CF-003, MEM-002 | All consensus reads + hopKeys ensure share one lock/atomic ref; HS must not race bootstrap null. |
-| `protect(-1)` vs fail-closed dial | NUL-004, RET-002, MEM-006 | Do not invoke protector with `-1`; treat missing FD as protect failure; clear static protector on stop. |
-| Engine `-1` ports vs UI/VPN | NUL-004, prior demo-ui | UI must gate on `isRunning && port > 0`; prefer nullable APIs over `-1`. |
-| `dirPort == 0` HTTP vs BEGIN_DIR | NUL-005, IO dir | Prefer OR BEGIN_DIR; do not “fix” by probing `:0`. |
-| OrConnection `!!` vs cancel close | NUL-006, IO-007, RET-001 | Close/null streams before cancelling reader; land with teardown order. |
-| Fabricated DirPort 9030 vs bind policy | NUL-007, IO-005, CRY-002 | Invented ports conflict with “explicit bind + auth”; fail config instead. |
-| Partial-start null refs | NUL-008, RET-001, FAIL-001, CF-001 | Single teardown helper wins; do not leave half-null listener set. |
-| Optional ed hop keys vs crypto strength | NUL-001, CRY | Fail closed > silent classic-ntor downgrade when peer advertised ntor-v3. |
+| `hopKeys!!` vs cache eviction | NUL-002, TYP-008, MEM-002 FIXED | Return `HopKeys` under same lock as eviction; MEM cap made NPE real |
+| Consensus snapshot vs map mutex | NUL-003, CF, MEM-002 | HS/`consensusOrNull` must share lock/atomic; DoS must not silent-null |
+| `protect(-1)` vs fail-closed dial | NUL-004, RET-002 OPEN, MEM-006 FIXED | Do not invoke protector with `-1`; treat missing FD as protect failure |
+| Engine `-1` ports vs UI/VPN | NUL-004, TYP-005 | Gate on `isRunning && port > 0`; prefer nullable APIs |
+| `dirPort == 0` HTTP vs BEGIN_DIR | NUL-005, IO | Prefer OR BEGIN_DIR; do not probe `:0` |
+| OrConnection `!!` vs cancel close | NUL-006, IO-007, RET-001, CF-002 | Close/null streams before cancelling reader |
+| Fabricated DirPort 9030 vs bind | NUL-007, IO-005 | Fail config instead of inventing ports |
+| Partial-start null refs | NUL-008 FIXED, RET-001 FIXED | Peer FAIL/RET may still say “NUL-003” for teardown — **ID is NUL-008** |
+| Optional ed vs crypto strength | NUL-001, CRY | Fail closed > silent classic-ntor downgrade |
+
+### Live (mailbox `/tmp/ktor-safety-pass`)
+
+| Peer claim | Resolution |
+| --- | --- |
+| RET-001 FIXED; Related still cites “NUL-003” for teardown | **Map teardown → NUL-008 FIXED**; keep NUL-003 = consensus/HS null |
+| MEM-002 FIXED + TYP-008 / NUL-002 | Aligned: eviction amplifies `!!` — NUL-002 stays OPEN, top priority |
+| RET-002 OPEN + NUL-004 `protect(-1)` | Land fail-closed protect + stop passing `-1` together |
+| CF-002 engine stop↔start race | NUL-008 FIXED does **not** close CF-002; residual NPE on late `socks=` is CF |
+| IO-007 cancel vs NUL-006 | Close sockets in `finally` before cancel; then drop OR `!!` |
+| No mailbox conflict requiring NUL renumber | IDs NUL-001..008 stable; NEW=0 |

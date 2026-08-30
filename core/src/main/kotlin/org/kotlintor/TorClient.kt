@@ -17,6 +17,7 @@ import org.kotlintor.hs.HsClient
 import org.kotlintor.hs.OnionClient
 import org.kotlintor.path.CircuitPath
 import org.kotlintor.path.PathSelector
+import org.kotlintor.util.readTextCompat
 import java.nio.file.Files
 
 class TorClient(
@@ -25,7 +26,11 @@ class TorClient(
     private val emitEvent: (TorEvent) -> Unit = {},
     firstHopDialer: (suspend (host: String, port: Int) -> java.net.Socket)? = null,
 ) {
-    private val bootstrap = BootstrapTracker()
+    /** True when resolve uses fail-closed DNSSEC stub. */
+    val dnssecValidate: Boolean
+        get() = config.dnssecMode == org.kotlintor.net.dns.DnssecMode.VALIDATE
+
+    private val bootstrap = BootstrapTracker { line -> emitEvent(TorEvent.Bootstrap(line)) }
     private val dir = DirectoryClient(
         config.dataDirectory.resolve("dir"),
         authorities = buildAuthorities(config),
@@ -66,7 +71,27 @@ class TorClient(
         } else {
             null
         }
+        val tcpProxy = config.runtime.tcpProxy
+        if (!tcpProxy.isNullOrBlank()) {
+            val hostPort = parseHostPort(tcpProxy)
+            if (hostPort != null) {
+                it.tcpProxyHost = hostPort.first
+                it.tcpProxyPort = hostPort.second
+                it.tcpProxyProtocol = config.runtime.tcpProxyProtocol
+            }
+        }
     }
+
+    private fun parseHostPort(spec: String): Pair<String, Int>? {
+        val t = spec.trim()
+        val idx = t.lastIndexOf(':')
+        if (idx <= 0) return null
+        val host = t.substring(0, idx).removePrefix("[").removeSuffix("]")
+        val port = t.substring(idx + 1).toIntOrNull() ?: return null
+        if (host.isEmpty() || port !in 1..65535) return null
+        return host to port
+    }
+
     private val automap: org.kotlintor.net.AutomapAddressMap? =
         if (config.automapHostsOnResolve) {
             org.kotlintor.net.AutomapAddressMap(
@@ -79,12 +104,13 @@ class TorClient(
     private val geoIpDb: org.kotlintor.dir.GeoIp.Database? =
         config.geoIpFile?.let { path ->
             runCatching {
-                org.kotlintor.dir.GeoIp.parseTorFormat(java.nio.file.Files.readString(path))
+                org.kotlintor.dir.GeoIp.parseTorFormat(path.readTextCompat())
             }.getOrNull()
         }.also { db ->
             org.kotlintor.stats.GeoIpStats.setGeoDb(db)
         }
     init {
+        paths.geoIp = geoIpDb
         val s = config.statsOptions
         org.kotlintor.stats.ConnStats.enabled = s.connDirectionStatistics || s.extraInfoStatistics
         org.kotlintor.stats.GeoIpStats.entryEnabled = s.entryStatistics
@@ -112,16 +138,29 @@ class TorClient(
     )
 
     val bootstrapTracker: BootstrapTracker get() = bootstrap
-    val isBootstrapped: Boolean get() = bootstrap.phase.value.progress >= BootstrapPhase.LOADING_DESCRIPTORS.progress
+    /** True only after bootstrap progress reaches [BootstrapPhase.DONE] (100). */
+    val isBootstrapped: Boolean get() = bootstrap.phase.value.progress >= BootstrapPhase.DONE.progress
+    /** Circuit-ready: DONE bootstrap and an open ready circuit. */
+    val isCircuitReady: Boolean get() = isBootstrapped && hasCircuit
     val hasCircuit: Boolean get() = readyCircuit != null
 
     fun circuitStatusLines(): List<String> = circuits.circuitStatusLines()
 
     suspend fun bootstrap(buildCircuit: Boolean = true) {
         Files.createDirectories(config.dataDirectory)
-        bootstrap.advance(BootstrapPhase.CONN_DIR)
-        bootstrap.advance(BootstrapPhase.HANDSHAKE_DIR)
-        bootstrap.advance(BootstrapPhase.REQUESTING_STATUS)
+        val flavor = if (config.useMicrodescriptors) "microdesc" else "ns"
+        bootstrap.advance(
+            BootstrapPhase.CONN_DIR,
+            summary = "Connecting to directory authority",
+        )
+        bootstrap.advance(
+            BootstrapPhase.HANDSHAKE_DIR,
+            summary = "Finishing handshake with directory server",
+        )
+        bootstrap.advance(
+            BootstrapPhase.REQUESTING_STATUS,
+            summary = "Fetching $flavor consensus",
+        )
         val c = if (config.useMicrodescriptors) {
             // Prefer microdesc-flavored consensus when UseMicrodescriptors=1; fall back to ns.
             runCatching { dir.fetchMicrodescConsensus() }.getOrElse { dir.fetchConsensus() }
@@ -132,15 +171,32 @@ class TorClient(
         routerList.clear()
         routerList.addAll(c.relays)
         circuits.applyConsensusParams(c.params)
-        bootstrap.advance(BootstrapPhase.LOADING_STATUS)
-        bootstrap.advance(BootstrapPhase.LOADING_KEYS)
-        bootstrap.advance(BootstrapPhase.REQUESTING_DESCRIPTORS)
+        bootstrap.advance(
+            BootstrapPhase.LOADING_STATUS,
+            summary = "Loaded consensus: ${c.relays.size} relays valid-after=${c.validAfter}",
+        )
+        bootstrap.advance(
+            BootstrapPhase.LOADING_KEYS,
+            summary = "Loading authority certificates / verifying consensus",
+        )
+        bootstrap.advance(
+            BootstrapPhase.REQUESTING_DESCRIPTORS,
+            summary = if (config.useMicrodescriptors) {
+                "Fetching microdescriptors for path selection"
+            } else {
+                "Fetching server descriptors for path selection"
+            },
+        )
 
         val path = paths.select(c.relays)
         ensureHopKeys(path.guard.fingerprintHex)
         ensureHopKeys(path.middle.fingerprintHex)
         ensureHopKeys(path.exit.fingerprintHex)
-        bootstrap.advance(BootstrapPhase.LOADING_DESCRIPTORS)
+        bootstrap.advance(
+            BootstrapPhase.LOADING_DESCRIPTORS,
+            summary = "Loaded hop keys guard=${path.guard.nickname} " +
+                "middle=${path.middle.nickname} exit=${path.exit.nickname}",
+        )
 
         if (!buildCircuit) return
 
@@ -152,12 +208,29 @@ class TorClient(
                 ensureHopKeys(p.guard.fingerprintHex)
                 ensureHopKeys(p.middle.fingerprintHex)
                 ensureHopKeys(p.exit.fingerprintHex)
-                bootstrap.advance(BootstrapPhase.CONN_OR)
-                bootstrap.advance(BootstrapPhase.HANDSHAKE_OR)
-                bootstrap.advance(BootstrapPhase.CIRCUIT_CREATE)
+                val attemptNote = if (attempt > 0) " (attempt ${attempt + 1})" else ""
+                bootstrap.advance(
+                    BootstrapPhase.CONN_OR,
+                    summary = "Connecting to guard ${p.guard.nickname} " +
+                        "${p.guard.ip}:${p.guard.orPort}$attemptNote",
+                    forceNotify = attempt > 0,
+                )
+                bootstrap.advance(
+                    BootstrapPhase.HANDSHAKE_OR,
+                    summary = "Finishing TLS/ntor handshake with ${p.guard.nickname}",
+                )
+                bootstrap.advance(
+                    BootstrapPhase.CIRCUIT_CREATE,
+                    summary = "Establishing circuit " +
+                        "${p.guard.nickname}→${p.middle.nickname}→${p.exit.nickname}",
+                )
                 readyCircuit = circuits.buildCircuit(p, hopKeys)
                 paths.confirmGuard(p.guard.fingerprintHex)
-                bootstrap.advance(BootstrapPhase.DONE)
+                bootstrap.advance(
+                    BootstrapPhase.DONE,
+                    summary = "Done — circuit via " +
+                        "${p.guard.nickname},${p.middle.nickname},${p.exit.nickname}",
+                )
                 return
             } catch (e: Exception) {
                 lastError = e
@@ -229,18 +302,85 @@ class TorClient(
         }
     }
 
-    /** Resolve [hostname] via RELAY RESOLVE on an exit circuit. */
-    suspend fun resolve(hostname: String): List<String> = mutex.withLock {
-        if (automap != null && automap.shouldAutomap(hostname)) {
-            return@withLock listOf(automap.getOrAssign(hostname))
+    /**
+     * Open a stream on a circuit keyed by [circuitIsolationKey] verbatim
+     * (does not go through [buildIsolationKey]). Used for DNSSEC TCP so one
+     * DNS resolve owns exactly one circuit regardless of SOCKS isolation flags.
+     */
+    private suspend fun connectOnCircuitKey(
+        host: String,
+        port: Int,
+        circuitIsolationKey: String,
+        optimisticData: Boolean = config.optimisticData,
+    ): TorStream {
+        if (dormant) error("TorClient dormant: refusing new streams")
+        val dest = automap?.reverse(host) ?: host
+        return mutex.withLock {
+            val circ = circuitForIsolation(circuitIsolationKey, dest, exitPort = port)
+            circ.openStream(dest, port, optimisticData = optimisticData)
         }
-        if (config.clientDnsRejectInternalAddresses &&
-            org.kotlintor.net.PrivateAddresses.isPrivate(hostname)
-        ) {
-            return@withLock emptyList()
+    }
+
+    /**
+     * Resolve [hostname] via RELAY RESOLVE, or DNSSEC stub when [TorConfig.dnssecMode]
+     * is Validate (fail-closed local validation over Tor TCP DNS).
+     *
+     * **Circuit isolation:** each call uses a fresh dedicated circuit (never the
+     * shared SOCKS/[readyCircuit] pool). DNSSEC TCP queries for the same call share
+     * that one circuit; it is closed when the resolve completes.
+     */
+    suspend fun resolve(hostname: String): List<String> {
+        val dnsIso = newDnsRequestIsolationKey(hostname)
+        mutex.withLock {
+            if (automap != null && automap.shouldAutomap(hostname)) {
+                return listOf(automap.getOrAssign(hostname))
+            }
+            if (config.clientDnsRejectInternalAddresses &&
+                org.kotlintor.net.PrivateAddresses.isPrivate(hostname)
+            ) {
+                return emptyList()
+            }
+            if (config.dnssecMode == org.kotlintor.net.dns.DnssecMode.VALIDATE) {
+                // Must not hold [mutex] — DNSSEC opens streams via [connect].
+                return@withLock
+            }
+            val circ = circuitForIsolation(dnsIso, hostname)
+            return try {
+                circ.resolve(hostname)
+            } finally {
+                releaseDnsRequestCircuit(dnsIso)
+            }
         }
-        val circ = circuitForIsolation(null, hostname)
-        circ.resolve(hostname)
+        return try {
+            resolveDnssec(hostname, dnsIso)
+        } finally {
+            mutex.withLock { releaseDnsRequestCircuit(dnsIso) }
+        }
+    }
+
+    private suspend fun resolveDnssec(hostname: String, dnsIso: String): List<String> {
+        val (host, port) = org.kotlintor.net.dns.parseRecursiveEndpoint(config.dnssecRecursive)
+        val anchors = org.kotlintor.net.dns.TrustAnchors.load(config.dnssecTrustAnchorFile)
+        val stub = org.kotlintor.net.dns.DnssecStubResolver(
+            recursiveHost = host,
+            recursivePort = port,
+            trustAnchors = anchors,
+            openPipe = { h, p ->
+                // Same isolation key ⇒ one circuit for all TCP DNS of this resolve.
+                org.kotlintor.net.TorStreamBytePipe(
+                    connectOnCircuitKey(h, p, circuitIsolationKey = dnsIso),
+                )
+            },
+        )
+        return stub.resolve(hostname)
+    }
+
+    /** Unique key so each DNS resolve builds (and later tears down) its own circuit. */
+    internal fun newDnsRequestIsolationKey(hostname: String): String =
+        "dns:${hostname.lowercase()}|${java.util.UUID.randomUUID()}"
+
+    private fun releaseDnsRequestCircuit(dnsIso: String) {
+        isolatedCircuits.remove(dnsIso)?.close()
     }
 
     private fun dirtyTimeoutMsFor(isolationKey: String?): Long {
@@ -401,6 +541,7 @@ class TorClient(
         readyCircuit = null
         isolatedCircuits.values.forEach { it.close() }
         isolatedCircuits.clear()
+        paths.clearRecentHops()
     }
 
     /** Drop ready + isolated circuits (OnionTunnel RefreshCircuits). */

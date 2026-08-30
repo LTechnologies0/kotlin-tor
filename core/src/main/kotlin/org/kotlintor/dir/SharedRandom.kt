@@ -72,7 +72,40 @@ object SharedRandom {
                 Phase.REVEAL ->
                     "$COMMIT_NS $PROTO_VERSION sha3-256 $rsaIdentityHex $encodedCommit $encodedReveal"
             }
+
+        /** C Tor `commit_encode`. */
+        fun commitEncode(): String = encodedCommit
+
+        /** C Tor `commit_has_reveal_value`. */
+        fun commitHasRevealValue(): Boolean = encodedReveal.isNotEmpty()
+
+        /** C Tor `commit_is_authoritative` — valid + reveal matches. */
+        fun commitIsAuthoritative(): Boolean = valid && verifyRevealMatchesCommit(this)
     }
+
+    /** C Tor `commit_decode` — parse commit/reveal base64 pair into [Commit] fields check. */
+    fun commitDecode(encodedCommit: String, encodedReveal: String? = null): Boolean {
+        if (encodedCommit.length != COMMIT_BASE64_LEN) return false
+        if (encodedReveal != null && encodedReveal.length != REVEAL_BASE64_LEN) return false
+        return try {
+            Base64.getDecoder().decode(encodedCommit)
+            if (encodedReveal != null) Base64.getDecoder().decode(encodedReveal)
+            true
+        } catch (_: IllegalArgumentException) {
+            false
+        }
+    }
+
+    /** C Tor `commitments_are_the_same`. */
+    fun commitmentsAreTheSame(a: Commit, b: Commit): Boolean =
+        a.encodedCommit == b.encodedCommit && a.rsaIdentityHex == b.rsaIdentityHex
+
+    /** C Tor `commit_encode` free function. */
+    fun commitEncode(commit: Commit): String = commit.commitEncode()
+
+    fun commitHasRevealValue(commit: Commit): Boolean = commit.commitHasRevealValue()
+
+    fun commitIsAuthoritative(commit: Commit): Boolean = commit.commitIsAuthoritative()
 
     fun generateCommit(
         rsaIdentity: ByteArray,
@@ -133,6 +166,56 @@ object SharedRandom {
         return Srv(numReveals = revealNum, value = value)
     }
 
+    /**
+     * C Tor `get_majority_srv_from_votes` — majority SRV among vote SRV values.
+     */
+    fun getMajoritySrvFromVotes(srvs: List<Srv>): Srv? {
+        if (srvs.isEmpty()) return null
+        val majority = (srvs.size + 1) / 2
+        val groups = srvs.groupBy { it.encodeBase64() }
+        return groups.values.firstOrNull { it.size >= majority }?.first()
+            ?: groups.values.maxByOrNull { it.size }?.first()
+    }
+
+    /** C Tor `reveal_encode` / `reveal_decode`. */
+    fun revealEncode(revealTs: Long, randomNumber: ByteArray): String {
+        require(randomNumber.size == RANDOM_NUMBER_LEN)
+        val raw = ByteArray(8 + RANDOM_NUMBER_LEN)
+        u64be(revealTs).copyInto(raw, 0)
+        randomNumber.copyInto(raw, 8)
+        return Base64.getEncoder().encodeToString(raw)
+    }
+
+    fun revealDecode(encodedReveal: String): Pair<Long, ByteArray>? {
+        if (encodedReveal.length != REVEAL_BASE64_LEN) return null
+        val raw = runCatching { Base64.getDecoder().decode(encodedReveal) }.getOrNull() ?: return null
+        if (raw.size != 8 + RANDOM_NUMBER_LEN) return null
+        var ts = 0L
+        for (i in 0 until 8) ts = (ts shl 8) or (raw[i].toLong() and 0xff)
+        return ts to raw.copyOfRange(8, raw.size)
+    }
+
+    @Volatile
+    private var numSrvAgreements: Int = 0
+
+    /** C Tor `set_num_srv_agreements`. */
+    fun setNumSrvAgreements(n: Int) {
+        numSrvAgreements = n.coerceAtLeast(0)
+    }
+
+    fun getNumSrvAgreements(): Int = numSrvAgreements
+
+    /** C Tor `save_commit_to_state` / `save_commit_during_reveal_phase`. */
+    fun saveCommitToState(state: State, commit: Commit) {
+        state.put(commit)
+    }
+
+    fun saveCommitDuringRevealPhase(state: State, commit: Commit): Boolean {
+        if (!commit.commitHasRevealValue()) return false
+        state.put(commit)
+        return true
+    }
+
     /** In-memory commit map keyed by RSA identity hex (dirauth testing). */
     class State {
         private val commits = ConcurrentHashMap<String, Commit>()
@@ -143,13 +226,25 @@ object SharedRandom {
             commits[commit.rsaIdentityHex] = commit
         }
 
+        fun get(identityHex: String): Commit? = commits[identityHex.uppercase()]
+            ?: commits[identityHex.lowercase()]
+            ?: commits.entries.firstOrNull { it.key.equals(identityHex, ignoreCase = true) }?.value
+
         fun all(): List<Commit> = commits.values.toList()
+
+        fun deleteAll() {
+            commits.clear()
+        }
+
+        fun remove(identityHex: String) {
+            commits.keys.filter { it.equals(identityHex, ignoreCase = true) }.forEach { commits.remove(it) }
+        }
 
         fun recompute() {
             currentSrv = computeSrv(all(), previousSrv)
         }
 
-        /** Persist current/previous SRV to disk (C Tor `sr_state` lite). */
+        /** Persist current/previous SRV to disk (C Tor `sr_state`). */
         fun save(path: java.nio.file.Path) {
             val lines = buildList {
                 previousSrv?.let { add("previous ${it.numReveals} ${it.encodeBase64()}") }
@@ -201,6 +296,66 @@ object SharedRandom {
             }
         }
     }
+
+    /** C Tor `should_keep_commit`. */
+    fun shouldKeepCommit(commit: Commit): Boolean =
+        commit.valid && verifyRevealMatchesCommit(commit)
+
+    /** C Tor `sr_act_post_consensus` — rotate previous←current and recompute. */
+    fun srActPostConsensus(state: State) {
+        state.previousSrv = state.currentSrv
+        state.recompute()
+    }
+
+    /** C Tor `sr_commit_free_`. */
+    fun srCommitFree_(commit: Commit?): Commit? = null
+
+    /** C Tor `sr_compute_srv`. */
+    fun srComputeSrv(commits: List<Commit>, previous: Srv? = null): Srv =
+        computeSrv(commits, previous)
+
+    /** C Tor `sr_generate_our_commit`. */
+    fun srGenerateOurCommit(rsaIdentity: ByteArray): Commit = generateCommit(rsaIdentity)
+
+    /** C Tor `sr_get_string_for_consensus`. */
+    fun srGetStringForConsensus(current: Srv?, previous: Srv? = null): String = buildString {
+        previous?.let { append(it.toNsLine("shared-rand-previous-value")) }
+        current?.let { append(it.toNsLine("shared-rand-current-value")) }
+    }
+
+    /** C Tor `sr_get_string_for_vote`. */
+    fun srGetStringForVote(commit: Commit, phase: Phase): String = commit.voteLine(phase)
+
+    /** C Tor `sr_handle_received_commits`. */
+    fun srHandleReceivedCommits(state: State, commits: List<Commit>): Int {
+        var n = 0
+        for (c in commits) {
+            if (!shouldKeepCommit(c) && !c.commitHasRevealValue()) continue
+            state.put(c)
+            n++
+        }
+        return n
+    }
+
+    /** C Tor `sr_init`. */
+    fun srInit(): State = State()
+
+    /** C Tor `sr_parse_commit` — parse one vote commit line. */
+    fun srParseCommit(line: String): Commit? =
+        DirVote.dirvoteParseSrCommits(line).firstOrNull()
+
+    /** C Tor `sr_save_and_cleanup`. */
+    fun srSaveAndCleanup(state: State, path: java.nio.file.Path) {
+        state.recompute()
+        state.save(path)
+        state.deleteAll()
+    }
+
+    /** C Tor `sr_srv_dup`. */
+    fun srSrvDup(srv: Srv): Srv = Srv(srv.numReveals, srv.value.copyOf())
+
+    /** C Tor `verify_commit_and_reveal`. */
+    fun verifyCommitAndReveal(commit: Commit): Boolean = verifyRevealMatchesCommit(commit)
 
     private fun ByteArray.compareUnsigned(other: ByteArray): Int {
         val n = minOf(size, other.size)

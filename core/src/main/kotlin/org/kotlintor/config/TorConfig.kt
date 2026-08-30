@@ -29,7 +29,7 @@ data class TorConfig(
     val exitPolicyRejectPrivate: Boolean = true,
     /** ExitPolicyRejectLocalInterfaces — reject this host's NIC addresses. */
     val exitPolicyRejectLocalInterfaces: Boolean = true,
-    /** IPv6Exit — advertise/allow IPv6 exit (descriptor flag lite). */
+    /** IPv6Exit — advertise/allow IPv6 exit (descriptor flag). */
     val ipv6Exit: Boolean = false,
     /** ExitNodes / MiddleNodes allowlists (empty = any). */
     val exitNodes: List<String> = emptyList(),
@@ -63,6 +63,15 @@ data class TorConfig(
     val fetchServerDescriptors: Boolean = true,
     /** ClientDNSRejectInternalAddresses. */
     val clientDnsRejectInternalAddresses: Boolean = true,
+    /**
+     * DNSSECMode — Off keeps RELAY RESOLVE; Validate uses fail-closed local DNSSEC
+     * over Tor TCP to [dnssecRecursive] (not DNSCrypt).
+     */
+    val dnssecMode: org.kotlintor.net.dns.DnssecMode = org.kotlintor.net.dns.DnssecMode.OFF,
+    /** Recursive DNS endpoint `host:port` for DNSSEC stub (TCP/53 via Tor). */
+    val dnssecRecursive: String = "1.1.1.1:53",
+    /** Optional DS trust-anchor file; null → bundled IANA root anchors. */
+    val dnssecTrustAnchorFile: Path? = null,
     /** Advertised IPv4 Address= for relay descriptor. */
     val address: String? = null,
     /** OutboundBindAddress (generic) + OR/Exit/PT overrides. */
@@ -111,6 +120,8 @@ data class TorConfig(
     val hiddenServices: List<HiddenServiceConfig> = emptyList(),
     val safeLogging: Boolean = true,
     val logLevel: LogLevel = LogLevel.NOTICE,
+    /** C Tor `quiet_level` — startup default log when no Log lines configured. */
+    val quietLevel: QuietLevel = QuietLevel.NONE,
     val isolationFlags: Set<IsolationFlag> = emptySet(),
     val clientUseIpv4: Boolean = true,
     val clientUseIpv6: Boolean = true,
@@ -121,8 +132,22 @@ data class TorConfig(
     val circuitDirtyTimeoutSec: Long = 600,
     /** Unused circuit timeout seconds after last stream closes. Default 10 minutes. */
     val circuitUnusedTimeoutSec: Long = 600,
-    /** When true, avoid same-/16 for distinct hops (path-spec lite). */
+    /** When true, avoid same-/16 for distinct hops (path-spec). */
     val enforceDistinctSubnets: Boolean = true,
+    /**
+     * Client-local: avoid same GeoIP country across hops in one circuit.
+     * Does not alter consensus; requires [geoIpFile] for effect.
+     */
+    val enforceDistinctCountries: Boolean = true,
+    /**
+     * Client-local: avoid same continent (derived from country) across hops.
+     * Does not alter consensus; requires [geoIpFile] for effect.
+     */
+    val enforceDistinctContinents: Boolean = true,
+    /** Client-local: avoid recently used middle/exit fingerprints on new circuits. */
+    val circuitAvoidRecentHops: Boolean = true,
+    /** Max fingerprints retained for [circuitAvoidRecentHops] (middle/exit only). */
+    val circuitRecentHopHistorySize: Int = 64,
     val dnsPort: ListenSpec? = null,
     /**
      * Local UDP-over-TCP gateway listen (kotlin-tor extension). Pair with SOCKS5
@@ -213,7 +238,7 @@ data class TorConfig(
     val newCircuitPeriodSec: Long = 30,
     /** LearnCircuitBuildTimeout — blend CBT quantile with CircuitBuildTimeout. */
     val learnCircuitBuildTimeout: Boolean = true,
-    /** Schedulers= preference list (vanilla/kist/kistlite). */
+    /** Schedulers= preference list: vanilla, kist, or kist_lite. */
     val schedulers: List<org.kotlintor.link.SchedulerType> =
         listOf(org.kotlintor.link.SchedulerType.KIST, org.kotlintor.link.SchedulerType.VANILLA),
     /** AuthoritativeDirectory / V3AuthoritativeDirectory — run dirvote publish loop. */
@@ -246,7 +271,7 @@ data class TorConfig(
     val process: ProcessOptions = ProcessOptions(),
     /** ServerDNS* options for exit DNS. */
     val serverDns: ServerDnsOptions = ServerDnsOptions(),
-    /** Dormant / Conflux / KIST / testing / outbound-proxy options (C Tor or_options lite). */
+    /** Dormant / Conflux / KIST / testing / outbound-proxy options (C Tor or_options). */
     val runtime: ClientRuntimeOptions = ClientRuntimeOptions(),
     /**
      * Keys listed in [TorrcManpageKeys] that are not yet fully typed into dedicated fields.
@@ -260,7 +285,7 @@ data class TorConfig(
 
     fun isLongLivedPort(port: Int): Boolean = port in longLivedPorts
 
-    /** C Tor `should_refuse_unknown_exits` lite (AUTO → treat as enabled). */
+    /** C Tor `should_refuse_unknown_exits` (AUTO → treat as enabled). */
     fun shouldRefuseUnknownExits(consensusParam: Boolean = true): Boolean =
         when (refuseUnknownExits) {
             AutoBool.YES -> true
@@ -471,6 +496,9 @@ object TorrcParser {
         var fetchHidServDescriptors = true
         var fetchServerDescriptors = true
         var clientDnsRejectInternalAddresses = true
+        var dnssecMode = org.kotlintor.net.dns.DnssecMode.OFF
+        var dnssecRecursive = "1.1.1.1:53"
+        var dnssecTrustAnchorFile: Path? = null
         var address: String? = null
         var outboundBind: String? = null
         var outboundBindOr: String? = null
@@ -506,6 +534,10 @@ object TorrcParser {
         var circuitDirtyTimeoutSec = 600L
         var circuitUnusedTimeoutSec = 600L
         var enforceDistinctSubnets = true
+        var enforceDistinctCountries = true
+        var enforceDistinctContinents = true
+        var circuitAvoidRecentHops = true
+        var circuitRecentHopHistorySize = 64
         var dnsPort: ListenSpec? = null
         var udpTorGatewayPort: ListenSpec? = null
         var publishServerDescriptor = true
@@ -709,6 +741,12 @@ object TorrcParser {
                 "CircuitUnusedTimeout", "MaxCircuitDirtiness" ->
                     circuitUnusedTimeoutSec = value.toLongOrNull() ?: circuitUnusedTimeoutSec
                 "EnforceDistinctSubnets" -> enforceDistinctSubnets = value != "0"
+                "EnforceDistinctCountries" -> enforceDistinctCountries = value != "0"
+                "EnforceDistinctContinents" -> enforceDistinctContinents = value != "0"
+                "CircuitAvoidRecentHops" -> circuitAvoidRecentHops = value != "0"
+                "CircuitRecentHopHistorySize" ->
+                    circuitRecentHopHistorySize =
+                        value.toIntOrNull()?.coerceIn(1, 10_000) ?: circuitRecentHopHistorySize
                 "DNSPort" -> dnsPort = ListenSpec.parse(value)
                 "UdpTorGatewayPort" -> udpTorGatewayPort = ListenSpec.parse(value)
                 "PublishServerDescriptor" -> publishServerDescriptor = value != "0"
@@ -920,6 +958,9 @@ object TorrcParser {
                 "FetchHidServDescriptors" -> fetchHidServDescriptors = value != "0"
                 "FetchServerDescriptors" -> fetchServerDescriptors = value != "0"
                 "ClientDNSRejectInternalAddresses" -> clientDnsRejectInternalAddresses = value != "0"
+                "DNSSECMode" -> dnssecMode = org.kotlintor.net.dns.DnssecMode.parse(value)
+                "DNSSECRecursive" -> dnssecRecursive = value.trim()
+                "DNSSECTrustAnchorFile" -> dnssecTrustAnchorFile = Path.of(value.trim())
                 "Address" -> address = value.trim().ifEmpty { null }
                 "OutboundBindAddress" -> outboundBind = value.trim().ifEmpty { null }
                 "OutboundBindAddressOR" -> outboundBindOr = value.trim().ifEmpty { null }
@@ -1410,6 +1451,9 @@ object TorrcParser {
             fetchHidServDescriptors = fetchHidServDescriptors,
             fetchServerDescriptors = fetchServerDescriptors,
             clientDnsRejectInternalAddresses = clientDnsRejectInternalAddresses,
+            dnssecMode = dnssecMode,
+            dnssecRecursive = dnssecRecursive,
+            dnssecTrustAnchorFile = dnssecTrustAnchorFile,
             address = address,
             outboundBindAddress = outboundBind,
             outboundBindAddressOr = outboundBindOr,
@@ -1450,6 +1494,10 @@ object TorrcParser {
             circuitDirtyTimeoutSec = circuitDirtyTimeoutSec,
             circuitUnusedTimeoutSec = circuitUnusedTimeoutSec,
             enforceDistinctSubnets = enforceDistinctSubnets,
+            enforceDistinctCountries = enforceDistinctCountries,
+            enforceDistinctContinents = enforceDistinctContinents,
+            circuitAvoidRecentHops = circuitAvoidRecentHops,
+            circuitRecentHopHistorySize = circuitRecentHopHistorySize,
             dnsPort = dnsPort,
             udpTorGatewayPort = udpTorGatewayPort,
             publishServerDescriptor = publishServerDescriptor,

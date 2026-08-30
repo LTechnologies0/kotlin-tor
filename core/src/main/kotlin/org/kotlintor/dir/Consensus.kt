@@ -39,6 +39,7 @@ data class RouterStatus(
 ) {
     val isGuard get() = "Guard" in flags
     val isExit get() = "Exit" in flags && "BadExit" !in flags
+    val isBadExit get() = "BadExit" in flags
     val isFast get() = "Fast" in flags
     val isStable get() = "Stable" in flags
     val isRunning get() = "Running" in flags
@@ -77,6 +78,9 @@ data class RouterStatus(
 
     /** FlowCtrl=2 advertises prop324 congestion control. */
     fun supportsFlowCtrl2(): Boolean = supportsProto("FlowCtrl", 2)
+
+    /** Conflux=1 (prop329). */
+    val supportsConflux: Boolean get() = supportsProto("Conflux", 1)
 
     override fun equals(other: Any?): Boolean =
         other is RouterStatus && identity.contentEquals(other.identity)

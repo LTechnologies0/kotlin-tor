@@ -12,6 +12,7 @@ import javax.net.ssl.X509TrustManager
  * Tor OR TLS does not use public CAs. Identity is established via the in-protocol CERTS
  * cell (and key binding). This TrustManager accepts the peer certificate during the TLS
  * handshake; callers must still validate CERTS against the expected relay identity.
+ * CERTS binding is mandatory for identity — trust-all TLS alone is never sufficient.
  *
  * Prefer Conscrypt so AUTHENTICATE can use RFC5705 keying-material export on JDK 21.
  */

@@ -3,7 +3,7 @@ package org.kotlintor.path
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Entry guard reachability / confirmation FSM (C Tor `entry_guard_t` lite).
+ * Entry guard reachability / confirmation FSM (C Tor `entry_guard_t`).
  *
  * Complements [GuardEntry] persistence in [PathSelector] with runtime reachability
  * and retry scheduling matching GUARD_REACHABLE_{NO,YES,MAYBE}.
@@ -24,6 +24,7 @@ data class EntryGuardRuntime(
     var confirmedAtEpochSec: Long = 0,
     var failingSinceEpochSec: Long = 0,
     var pathBiasDisabled: Boolean = false,
+    var pathbias: GuardPathbiasState = GuardPathbiasState(),
 )
 
 class EntryGuardFsm(

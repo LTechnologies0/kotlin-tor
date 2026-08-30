@@ -8,7 +8,7 @@ import java.util.zip.Deflater
 /**
  * Serve directory documents from the client cache (relay DirPort / BEGIN_DIR subset).
  *
- * Supported URL surface (dir-spec lite):
+ * Supported URL surface (dir-spec):
  * - `/tor/status-vote/current/consensus[.z]`
  * - `/tor/status-vote/current/consensus-microdesc[.z]`
  * - `/tor/server/fp/<fp>[+fp…]`

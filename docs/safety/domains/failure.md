@@ -1,94 +1,162 @@
-# Domain: failure
+# Domain: failure (re-audit)
 
-**Scope:** fail-open vs fail-closed on control auth, SafeSocks, bootstrap-before-proxy, `KotlinTorEngine` / `TorDaemon.start` error paths.  
-**Main sources:** `:core` (`TorDaemon`, `TorClient`, `SafeSocksPolicy`), `:proxy`, `:control`, `:android`.
+**Pass:** 2026-08-03 · kotlin-tor SNAPSHOT  
+**Scope:** fail-open vs fail-closed — engine/daemon start, bootstrap→proxy readiness, control NULL auth, SafeSocks, Android VPN protect policy, swallowed security failures (cross-RET), ADD_ONION readiness, daemon crash recovery.  
+**Modules:** `:android` (`KotlinTorEngine`, `VpnTunTorSession`), `:core` (`TorDaemon`, `TorClient`, `NetworkPolicy`/`OutboundBind`, `PlatformNatives`, `CertsCell`, `RelayService`), `:proxy`, `:control`.  
+**IDs:** `FAI-NNN` (canonical). Prior docs used `FAIL-NNN` — same numbers; treat `FAIL-00x` ≡ `FAI-00x`.  
+**Cap:** ~8 Critical/High (RET-owned duplicates counted once under RET, listed here for fail-open policy only).
 
-## Critical / High summary
+## Status rollup
 
-| ID | Risk | One-liner |
-|----|------|-----------|
-| FAIL-001 | **Critical** | `startWithPorts` catch clears `running` but leaves SOCKS/daemon live |
-| FAIL-002 | **Critical** | Proxy listeners opened when bootstrap incomplete (`DisableNetwork` / circuit swallow) |
-| FAIL-003 | **High** | `daemon.start` failure leaves `started=true`; engine never `stop()` → restart stuck |
-| FAIL-004 | **High** | Control NULL auth fails open when cookie + hashed password both off |
-| FAIL-005 | **High** | SOCKS/HTTP accept with no bootstrap gate (unlike `OnionTunnel.ready`) |
-| FAIL-006 | **High** | TUN `markBootstrapped()` does not check `client.isBootstrapped` / circuit |
-| FAIL-007 | **Medium** | `SafeSocks` default off; `allowIpLiterals=true` nullifies policy |
-| FAIL-008 | **Medium** | `isBootstrapped` = descriptors loaded, not `DONE` — soft fail-open |
+| ID | Risk | Status | One-liner |
+|----|------|--------|-----------|
+| FAI-001 | Critical | **FIXED** | Partial-start catch/stop tear down listeners + daemon (`teardownPartialStart`) |
+| FAI-002 | Critical | **FIXED** | `bootstrapped`/`onReady` gated on circuit `DONE` |
+| FAI-003 | High | **FIXED** | Engine path clears sticky `started` via teardown; residual: raw `TorDaemon.start` throw |
+| FAI-004 | High | **OPEN** | Control `METHODS=NULL` + empty AUTH fail-open when cookie+hash both off |
+| FAI-005 | High | **OPEN** | SOCKS/HTTP accept with no bootstrap / `DONE` gate |
+| FAI-006 | High | **OPEN** | `VpnTunTorSession` `markBootstrapped()` ignores `client.isBootstrapped` |
+| FAI-007 | Medium | **OPEN** | SafeSocks default off; VPN `allowIpLiterals=true` nullifies policy |
+| FAI-008 | Medium | **FIXED** | `isBootstrapped` = `DONE` (100); added `isCircuitReady` |
+| FAI-009 | Critical | **FIXED** | VPN protect fail-closed — **canonical RET-002** |
+| FAI-010 | High | **NEW** | No daemon crash recovery; `SupervisorJob` + sticky `started` on hard bootstrap throw |
+
+**Counts:** FIXED 4 · OPEN 5 · NEW 1 · Critical/High open+new (capped): **FAI-004, FAI-005, FAI-006, FAI-010** (4).
+
+**Top 3 open FAI IDs:** **FAI-005**, **FAI-004**, **FAI-006**
+
+**RET cross-check (current code — do not re-ID):**
+
+| RET | Risk | Verified | Notes for FAI |
+|-----|------|----------|---------------|
+| RET-001 | Critical | **FIXED** | ≡ FAI-001 |
+| RET-002 | Critical | **FIXED** | ≡ FAI-009 fail-closed protect |
+| RET-003 | High | **OPEN** | Auth verify ignore — FAI cites only; remediation under RET |
+| RET-004 | High | **OPEN** | TLS `startHandshake` swallow |
+| RET-005 | High | **OPEN** | Keypin Result swallow |
+| RET-006 | High | **OPEN** | Soft CERTS → null identity |
+| RET-007 | High | **OPEN** | ADD_ONION premature 250 OK |
+| RET-008 | Medium | **OPEN** | OnionTunnel refresh/dormant silent |
 
 ---
 
-### [FAIL-001] Engine start catch is fail-open (no teardown)
-- **Track**: failure
-- **Evidence**: `android/.../KotlinTorEngine.kt:99-143` — `running.compareAndSet(false,true)` then `daemon.start()` + `Socks5Server`/`HttpConnect`/`ControlServer`; `catch` only `running.set(false)`, Orbot error broadcast, `onError`
-- **Risk**: Critical
-- **Exploit logic**: Mid-start bind/control failure after SOCKS `start` leaves accepting listeners while `isRunning == false` and `onError` fired — callers treat engine as down; traffic still flows
-- **Fix**: Shared teardown (stop all listeners, `daemon.stop()`, clear refs, reset flags) before `onError` — same as RET-001 / NUL-003
-- **Related**: RET-001, NUL-003, CF-001
+## FIXED
 
-### [FAIL-002] Proxy traffic accepted without completed bootstrap
+### [FAI-001] Engine start catch is fail-open (no teardown) — **FIXED**
+- **Track**: failure · alias FAIL-001 · **canonical remediation RET-001**
+- **Status**: FIXED (Phase B / current sources)
+- **Evidence (current)**:
+  - `android/.../KotlinTorEngine.kt:147-155` — `catch` → `teardownPartialStart()`; `running`/`bootstrapped` cleared; then `onError`
+  - `:159-170` — `stop()` same teardown + protector clear + `scope.cancel()`
+  - `:192-205` — stops SOCKS / roleSocks / DNS / HTTP / Control, then `daemon.stop()`
+  - `:184-188` — `ensureScope()` recreates scope + `TorDaemon` after cancel
+- **Risk**: was Critical
+- **Residual**: readiness still fail-open → **FAI-002**; FD drain on cancel → IO-007/008
+- **Related**: RET-001, NUL-003, CF-001/002, MEM-006/007
+
+### [FAI-003] `daemon.start` throw leaves `started=true`; engine never stops — **FIXED** (engine)
+- **Track**: failure · alias FAIL-003
+- **Status**: FIXED on `KotlinTorEngine` path; residual noted under **FAI-010**
+- **Evidence (current)**: Engine catch calls `teardownPartialStart()` → `daemon.stop()` → `started.set(false)` (`TorDaemon.kt:329-340`). Restart via `ensureScope()` + new `TorDaemon`.
+- **Residual**: Direct `TorDaemon.start()` still CAS `started=true` at `:136` before bootstrap; hard throw at `:172` does **not** clear `started` unless caller `stop()`s — library API sticky-start remains FAI-010.
+- **Related**: FAI-001, RET-001, FAI-010
+
+---
+
+## OPEN
+
+### [FAI-002] Proxy / Orbot “ready” without completed bootstrap — **FIXED** · Critical
+- **Track**: failure · alias FAIL-002  
+  **⚠ Naming clash:** `SAFETY_AUDIT.md` once labeled “IO-005 / FAIL-002” for Control non-loopback auth. That remedia­tion is **IO-005 / Control gate**, **not** this finding. FAI-002 = bootstrap readiness only.
+- **Status**: FIXED
+- **Evidence**: `TorClient.isBootstrapped` ≥ `DONE` (100); `isCircuitReady` added; `KotlinTorEngine` sets `bootstrapped`/`onReady` only when client reports DONE (DisableNetwork starts listeners without claiming circuit-ready)
+- **Related**: FAI-005 residual (SOCKS still accepts before DONE), FAI-006 TUN
+
+### [FAI-008] `isBootstrapped` threshold is pre-DONE — **FIXED** · Medium
+- **Status**: FIXED (via FAI-002) — `isBootstrapped` now means DONE; `isCircuitReady` = DONE && hasCircuit
+
+### [FAI-009] Android VPN `protectSocket` false discarded — **FIXED** · Critical
+- **Track**: failure · **canonical ID RET-002**
+- **Status**: FIXED — dial path fail-closed in NetworkPolicy / PtSocksDialer; do not regress
+
+### [FAI-004] Control auth NULL path is fail-open — **OPEN** · High
+- **Track**: failure · alias FAIL-004  
+  **⚠ Naming clash:** `SAFETY_AUDIT` row “IO-001 / FAIL-004” meant SOCKS accept cap — **not** this ID. FAI-004 = NULL control auth.
+- **Evidence**:
+  - `ControlServer.kt:257-266` — `METHODS=NULL` when no cookie/password
+  - `:279-284`, `:296-299` — empty / permissive AUTH succeeds when both mechanisms off
+  - Mitigations landed: non-loopback Control requires cookie or hashed (`ControlServer.kt:47-52`, `KotlinTorEngine.requireSafeControl:215-221`); default `TorConfig.cookieAuthentication = true` (`TorConfig.kt:13`)
+- **Risk**: High (Critical if ControlPort non-loopback **and** auth disabled — gate now blocks that combo)
+- **Exploit logic**: Explicit `CookieAuthentication 0` + no hashed password → any peer on the bound interface runs SIGNAL/SETCONF/ADD_ONION after empty AUTHENTICATE
+- **Fix**: Keep NULL for loopback lab only; refuse NULL entirely when bind is non-loopback (done); prefer never advertising NULL in production profiles; document SnapShot risk for loopback NULL
+- **Related**: CRY-001/002, IO-005, RET-003 (orthogonal — do not weaken OR AUTH)
+
+### [FAI-005] SOCKS/HTTP have no bootstrap gate — **OPEN** · High
+- **Track**: failure · alias FAIL-005
+- **Evidence**: `Socks5Server.kt:69-94` accepts and handles immediately after bind; no `DONE` / `hasCircuit` check. Contrast `OnionTunnel.kt:83-85` `if (!ready.get()) error(...)`.
+- **Risk**: High
+- **Exploit logic**: Once listeners exist under FAI-002, clients get SOCKS success/failure races; no uniform “Tor not ready” rejection at accept
+- **Fix**: Refuse CONNECT with SOCKS failure until circuit-ready (or documented lazy-build); align with OnionTunnel gate
+- **Related**: FAI-002, IO-009 (uncapped AP still amplifies)
+
+### [FAI-006] TUN marks bootstrapped without Tor readiness check — **OPEN** · High
+- **Track**: failure · alias FAIL-006
+- **Evidence**: `VpnTunTorSession.kt:36-39` — `tunnel.markBootstrapped()` then `start()`; comment only about protect. `OnionTunnel.markBootstrapped()` (`:60-63`) sets `ready=true` unconditionally.
+- **Risk**: High
+- **Exploit logic**: If `onReady` fires under FAI-002, TUN TCP opens while client may lack circuit → error loops; pairs with unprotected dial if protect fails open (FAI-009 / RET-002)
+- **Fix**: `markBootstrapped()` only when `client.isBootstrapped && (hasCircuit || explicit DisableNetwork refuse-TCP policy)`; else keep `ready=false`
+- **Related**: FAI-002, RET-002 / FAI-009
+
+### [FAI-007] SafeSocks fail-open defaults / VPN override — **OPEN** · Medium
+- **Track**: failure · alias FAIL-007
+- **Evidence**: `TorConfig.kt:81` `safeSocks = false`; `SafeSocksPolicy.allows` (`NetworkPolicy.kt:190-195`) — `allowIpLiterals` ⇒ always true; `routerDefaultConfig` sets `safeSocks=true` **and** `safeSocksAllowIpLiterals=true` (`KotlinTorEngine.kt:237-238`)
+- **Risk**: Medium (CLI default); Low–Medium on VPN (intentional fake-IP)
+- **Fix**: Document; scope IP allowlist to Automap/fake-IP ranges instead of global bypass
+- **Related**: deferred CLI default (SAFETY_AUDIT)
+
+---
+
+## NEW
+
+### [FAI-010] No daemon crash recovery; sticky `started` on hard bootstrap throw — **NEW** · High
 - **Track**: failure
 - **Evidence**:
-  - `TorDaemon.kt:157-161` — `DisableNetwork=1` returns after notice (no consensus/circuit)
-  - `TorDaemon.kt:169-174` — circuit bootstrap exception swallowed if `client.isBootstrapped` (descriptors only)
-  - `KotlinTorEngine.kt:103-129` — on any successful `daemon.start()` return: `bootstrapped.set(true)`, bind SOCKS/HTTP/DNS/Control, `onReady`
-- **Risk**: Critical
-- **Exploit logic**: Engine reports ready / Orbot `STATUS_ON` while streams cannot (or must lazily) build circuits; apps and TUN assume Tor path is live
-- **Fix**: Fail-closed gate: do not bind app proxies or invoke `onReady` until `BootstrapPhase.DONE` (or explicit `DisableNetwork` mode that **refuses** SOCKS CONNECT). Surface partial bootstrap via status only
-- **Related**: FAIL-005, FAIL-006, FAIL-008
+  - No `CoroutineExceptionHandler` / auto-restart path in `TorDaemon` or `KotlinTorEngine` (repo grep: no crash-recovery hooks)
+  - `TorDaemon` uses `SupervisorJob` (`TorDaemon.kt:47`) — child job failures do not cancel siblings and are not surfaced as engine restart
+  - `start()` CAS `started=true` at `:136`; on hard bootstrap failure `:172` rethrows **without** `started.set(false)` — only `stop()` clears it (`:329-340`)
+  - Engine path mitigates via FAI-001 teardown; raw daemon / embedded callers can wedge on “already started”
+- **Risk**: High (permanent start failure after one hard bootstrap error; silent child death under SupervisorJob)
+- **Fix**: `finally` reset `started` on unrecovered `start()` throw; optional supervised restart policy with backoff; surface fatal child exceptions to engine `onError` and refuse traffic until recovered
+- **Related**: FAI-003 residual, CF-002, MEM-007, CPU-004
 
-### [FAIL-003] `daemon.start` throw leaves daemon started; engine does not stop
-- **Track**: failure
-- **Evidence**: `TorDaemon.kt:136` CAS `started=true` before bootstrap; throw on hard bootstrap fail (`172`); `stop()` is only place that clears `started` (`329-340`). `KotlinTorEngine.kt:137-142` catch never calls `daemon.stop()` / listener stop
-- **Risk**: High
-- **Exploit logic**: First `start` fails → `running=false` but daemon `started=true`. Retry `startWithPorts` → daemon throws `"already started"` → permanent start failure until process recreate
-- **Fix**: On any engine start failure call `daemon.stop()` (and listener teardown). Optionally reset `started` in `TorDaemon.start` `finally` on unrecovered throw
-- **Related**: FAIL-001, CF-001
-
-### [FAIL-004] Control auth NULL path is fail-open
-- **Track**: failure
-- **Evidence**: `control/.../ControlServer.kt:241` adds `METHODS=NULL` when no cookie/password; `254-259` empty `AUTHENTICATE` succeeds; `271-274`, `321-325` also grant auth when both mechanisms off. Cookie path with cookie present is fail-closed (`302-328`)
-- **Risk**: High (Critical if ControlPort bound non-loopback — IO-005 / CRY-002)
-- **Exploit logic**: `CookieAuthentication 0` and no `HashedControlPassword` → any local (or remote) peer runs `SIGNAL`/`SETCONF`/`ADD_ONION` after empty AUTHENTICATE
-- **Fix**: Keep NULL for loopback-only lab; reject non-loopback ControlPort unless cookie or hashed password configured; prefer default cookie (already `TorConfig.cookieAuthentication = true`)
-- **Related**: CRY-002, IO-005
-
-### [FAIL-005] SOCKS/HTTP have no bootstrap gate
-- **Track**: failure
-- **Evidence**: `proxy/.../Socks5Server.kt:57-75` accepts and dials immediately; `TorClient.connect` only errors on missing consensus (`217`, `290`, `307`). Contrast `OnionTunnel.kt:82-85` `if (!ready.get()) error("OnionTunnel not bootstrapped")`
-- **Risk**: High
-- **Exploit logic**: Once listeners exist (FAIL-002), clients get SOCKS success/failure races and may retry clearnet; no uniform “Tor not ready” rejection at accept
-- **Fix**: Dialer/proxy refuse CONNECT with SOCKS failure until `DONE` (or consensus+circuit policy); align with OnionTunnel gate
-- **Related**: FAIL-002
-
-### [FAIL-006] TUN marks bootstrapped without Tor readiness check
-- **Track**: failure
-- **Evidence**: `VpnTunTorSession.kt:36-39` — `tunnel.markBootstrapped()` then `start()`; comment only about protect. Called from `KotlinTorVpnService.startTunStack` inside engine `onReady` (`KotlinTorVpnService.kt:64-67`)
-- **Risk**: High
-- **Exploit logic**: If `onReady` fires under FAIL-002, TUN TCP path opens (`OnionTunnel.openTcpFlow`) while client lacks circuit/consensus → app traffic fails open into error loops / leak risk if protect missing (RET-002)
-- **Fix**: `markBootstrapped()` only when `client.isBootstrapped && (hasCircuit || DisableNetwork policy)`; else keep `ready=false`
-- **Related**: FAIL-002, RET-002
-
-### [FAIL-007] SafeSocks fail-open defaults / VPN override
-- **Track**: failure
-- **Evidence**: `TorConfig.kt:81` `safeSocks = false`; `NetworkPolicy.kt:190-195` — if `allowIpLiterals` then `allows` always `true`; `KotlinTorEngine.vpnDefaultConfig` sets `safeSocks=true` **and** `safeSocksAllowIpLiterals=true` (`181-182`); enforcement in `TorClient.connect` (`197-208`)
-- **Risk**: Medium (CLI/default config); Low–Medium on Android VPN (intentional fake-IP)
-- **Exploit logic**: Default daemon accepts IP-literal SOCKS destinations (DNS at client / exit mismatch class). VPN profile disables the only SafeSocks check by design
-- **Fix**: Document; keep router/demo `safeSocks=true` without `allowIpLiterals` unless fake-IP path; consider allowlisting only Automap/fake-IP ranges instead of global bypass
-- **Related**: deferred CLI default flip (SAFETY_AUDIT)
-
-### [FAIL-008] `isBootstrapped` threshold is pre-DONE
-- **Track**: failure
-- **Evidence**: `TorClient.kt:115` — `progress >= LOADING_DESCRIPTORS`; `DONE` only after successful circuit (`160`). `TorDaemon.kt:172` uses this to **not** rethrow circuit failure
-- **Risk**: Medium (enables FAIL-002)
-- **Exploit logic**: Callers / daemon treat “bootstrapped” as usable Tor; C Tor controllers often wait for `PROGRESS=100` / circuit
-- **Fix**: Split `directoryReady` vs `circuitReady`; gate proxies on circuit (or documented lazy-build mode)
-- **Related**: FAIL-002
+---
 
 ## Conflicts
 
-- **Proxy gate vs DNSCrypt/OnionVPN ready contract**: Docs require SOCKS+DNSPort up before DNSCrypt; fail-closed “no bind until DONE” delays that plane — prefer bind control-only early, delay SOCKS CONNECT until DONE (or return SOCKS failure code without clearnet fallback).
-- **VPN `safeSocksAllowIpLiterals` vs SafeSocks fail-closed**: Fake-IP TUN needs IP destinations — do not flip global allow; scope exception to Automap/fake-IP cookies only (tensions with FAIL-007 fix).
-- **NULL control auth vs control-spec**: Spec allows NULL; safety requires bind policy (IO-005) rather than removing NULL entirely.
-- **Teardown `daemon.stop()` cancels scope vs restart (CF-001)**: Fail-closed cleanup must recreate engine scope on next start — same conflict as RET/CF.
-- **Fail-closed loopback bind vs product ports**: OnionVPN allocated loopback ports remain loopback; no conflict with FAIL-004 remediations.
+Mailbox `/tmp/ktor-safety-pass/{return,io,memory,...}.md` + in-repo domains at write time.
+
+| Clash | Domains | Resolution |
+|-------|---------|------------|
+| FAI-001 vs RET-001 | return, failure | **Same fix.** Status FIXED both; RET owns Boolean/teardown evidence; FAI owns fail-closed start policy. Prefer code + RET-001 line refs. |
+| FAI-009 vs RET-002 | return, failure, memory | **Same bug.** Canonical remediation ID **RET-002**; FAI-009 is fail-open policy mirror. Do not open a second fix ticket. |
+| RET-003/004/006/007 | return | Verified still OPEN in current code; FAI does **not** mint parallel Critical IDs (cap). Auth/CERTS/ADD_ONION stay RET-owned. |
+| SAFETY_AUDIT “FAIL-002” = Control bind | SAFETY_AUDIT vs this file | **Mislabel.** Control non-loopback auth = IO-005. FAI-002 remains bootstrap/`onReady`. |
+| SAFETY_AUDIT “FAIL-004” = SOCKS accept | SAFETY_AUDIT vs this file | **Mislabel.** SOCKS accept cap = IO-001. FAI-004 remains NULL control auth. |
+| NULL auth vs bind gate | FAI-004, IO-005, CRY | Non-loopback require cookie/hash **landed**; residual is loopback NULL + intentional auth-off profiles. |
+| Fail-closed DONE vs DNSCrypt/OnionVPN port contract | FAI-002/005 | Prefer bind Control early; delay SOCKS CONNECT success / `onReady` until DONE (or SOCKS reject without clearnet fallback). |
+| VPN SafeSocks IP literals | FAI-007 | Fake-IP needs IPs — do not global-flip; allowlist Automap/fake-IP only. |
+| Teardown vs scope cancel | FAI-001 FIXED, CF-002, MEM-007, CPU-004 | Recreate via `ensureScope`; move heavy close off Main (CPU-004 still OPEN). |
+| Protect clear vs fail-closed dial | MEM-006 FIXED, FAI-009/RET-002 FIXED | Clear on `stop` OK; dial remains fail-closed when protector set. |
+| Soft CERTS / auth ignore | RET-006, RET-003, CF | Hard-fail CERTS + enforce verify — complementary to FAI bootstrap gates; not renamed to FAI. |
+| ADD_ONION premature OK | RET-007 | Prefer HS_DESC events; never silent 250 — control fail-open readiness, tracked under RET. |
+
+---
+
+## Return to board
+
+| Bucket | IDs |
+|--------|-----|
+| **FIXED** | FAI-001, FAI-002, FAI-003, FAI-008, FAI-009 |
+| **OPEN** | FAI-004, FAI-005, FAI-006, FAI-007 |
+| **NEW** | FAI-010 |
+| **Top 3 open** | FAI-005, FAI-004, FAI-006 |

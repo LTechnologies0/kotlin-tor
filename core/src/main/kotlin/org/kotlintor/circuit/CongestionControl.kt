@@ -29,6 +29,7 @@ class CongestionControl(
     private val packageCredit = Channel<Unit>(Channel.UNLIMITED)
     private var inflight = 0
     private var deliverCount = 0
+    private var packagedCount = 0
     private var rttMinMs: Long = Long.MAX_VALUE
     private var rttEwmaMs: Long = 0
     private var inSlowStart = true
@@ -38,18 +39,24 @@ class CongestionControl(
     val inFlight: Int get() = inflight
     val increment: Int get() = sendmeInc
 
-    suspend fun beforeOutboundData() {
+    /**
+     * Before sending an outbound RELAY_DATA cell.
+     * @return true when a digest should be recorded for the next inbound SENDME.
+     */
+    suspend fun beforeOutboundData(): Boolean {
         while (true) {
-            val wait = mutex.withLock {
+            val (wait, record) = mutex.withLock {
                 if (inflight < cwnd) {
                     inflight++
+                    packagedCount++
                     sentAt.addLast(System.nanoTime())
-                    false
+                    val record = packagedCount % sendmeInc == 0
+                    false to record
                 } else {
-                    true
+                    true to false
                 }
             }
-            if (!wait) return
+            if (!wait) return record
             packageCredit.receive()
         }
     }
@@ -63,8 +70,12 @@ class CongestionControl(
         null
     }
 
-    /** Inbound circuit-level SENDME. */
-    suspend fun onInboundSendme() {
+    /**
+     * Inbound circuit-level SENDME. Credits only when [Sendme.isValid] accepts
+     * [payload] against [digests].
+     */
+    suspend fun onInboundSendme(payload: ByteArray, digests: Sendme.DigestQueue): Boolean {
+        if (!Sendme.isValid(digests, payload)) return false
         mutex.withLock {
             val now = System.nanoTime()
             // Consume up to sendmeInc send timestamps for RTT (oldest first).
@@ -79,28 +90,23 @@ class CongestionControl(
             inflight = (inflight - sendmeInc).coerceAtLeast(0)
 
             if (rttMinMs != Long.MAX_VALUE && rttEwmaMs > 0) {
-                // queue_use ≈ cwnd * (1 - rtt_min/rtt_ewma)  (Vegas cwnd BDP mix = 100%)
-                val queueUse = if (rttEwmaMs <= rttMinMs) {
-                    0
-                } else {
-                    ((cwnd.toLong() * (rttEwmaMs - rttMinMs)) / rttEwmaMs).toInt()
-                }
-                if (inSlowStart) {
-                    if (queueUse > delta) {
-                        inSlowStart = false
-                        cwnd = (cwnd * 3 / 4).coerceAtLeast(cwndMin)
-                    } else {
-                        cwnd = (cwnd + sendmeInc).coerceAtMost(cwndMax)
-                    }
-                } else {
-                    when {
-                        queueUse < alpha -> cwnd = (cwnd + cwndInc).coerceAtMost(cwndMax)
-                        queueUse > beta -> cwnd = (cwnd - cwndInc).coerceAtLeast(cwndMin)
-                    }
-                }
+                val queueUse = CongestionControlVegas.queueUse(cwnd, rttMinMs, rttEwmaMs)
+                val vegas = CongestionControlVegas.updateCwnd(
+                    cwnd = cwnd,
+                    queueUse = queueUse,
+                    inSlowStart = inSlowStart,
+                    params = CongestionControlVegas.Params(alpha, beta, gamma = alpha, delta = delta),
+                    sendmeInc = sendmeInc,
+                    cwndInc = cwndInc,
+                    cwndMin = cwndMin,
+                    cwndMax = cwndMax,
+                )
+                cwnd = vegas.newCwnd
+                inSlowStart = vegas.inSlowStart
             }
         }
         packageCredit.trySend(Unit)
+        return true
     }
 
     companion object {

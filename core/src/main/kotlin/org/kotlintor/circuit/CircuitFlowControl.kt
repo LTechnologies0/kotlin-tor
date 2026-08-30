@@ -5,7 +5,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Classic circuit-level windows (tor-spec §7.3) without prop324 congestion control.
+ * Classic circuit-level SENDME windows (C Tor `sendme.c` / tor-spec §7.3).
+ *
+ * Inventory: `L1:core/or/sendme.c` (windows) — prop324 XON/XOFF lives in
+ * [CongestionControlFlow].
  *
  * Defaults: circwindow=1000, increment=100. Authenticated SENDME version 1.
  */
@@ -27,33 +30,38 @@ class CircuitFlowControl(
         null
     }
 
-    /** Before sending an outbound RELAY_DATA cell. */
-    suspend fun beforeOutboundData() {
+    /**
+     * Before sending an outbound RELAY_DATA cell.
+     * @return true when a digest should be recorded for the next inbound SENDME
+     *   (C Tor `sendme_record_cell_digest_on_circ` cadence).
+     */
+    suspend fun beforeOutboundData(): Boolean {
         while (true) {
-            val wait = mutex.withLock {
+            val (wait, record) = mutex.withLock {
                 if (packageWindow > 0) {
                     packageWindow--
-                    false
+                    val record = packageWindow % increment == 0
+                    false to record
                 } else {
-                    true
+                    true to false
                 }
             }
-            if (!wait) return
+            if (!wait) return record
             packageCredit.receive()
         }
     }
 
-    /** Inbound circuit-level SENDME (stream_id=0). */
-    suspend fun onInboundSendme() {
+    /**
+     * Inbound circuit-level SENDME (stream_id=0). Credits package window only
+     * when [Sendme.isValid] accepts the payload against [digests].
+     * @return false if the cell was rejected (no credit).
+     */
+    suspend fun onInboundSendme(payload: ByteArray, digests: Sendme.DigestQueue): Boolean {
+        if (!Sendme.isValid(digests, payload)) return false
         mutex.withLock {
             packageWindow += increment
         }
         packageCredit.trySend(Unit)
+        return true
     }
-}
-
-/** Build authenticated SENDME v1 body from a 20-byte digest. */
-fun buildSendmeV1(digest20: ByteArray): ByteArray {
-    require(digest20.size >= 20)
-    return byteArrayOf(1, 0, 20) + digest20.copyOf(20)
 }

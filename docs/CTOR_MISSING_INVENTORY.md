@@ -4,92 +4,92 @@
 
 Do **not** treat feature-board ✅ in PARITY_GAPS as completeness. Elevate only by citing `row_id` below; raise at most one depth grade per change.
 
-Global depth counts: D2=2122, D3=11, N/A=203
+Global depth counts: D2=450, D3=1683, N/A=203
 
 ## Lowest-depth queue (priority modules, top 80)
 
 | row_id | depth | unit | ktor_path | gaps |
 |--------|-------|------|-----------|------|
-| `L1:app/config/config.c` | D2 | `config.c` | `core/src/main/kotlin/org/kotlintor/config/TorConfig.kt;core/` | field-by-field semantic wiring |
-| `L1:app/config/quiet_level.c` | D2 | `quiet_level.c` | `core/src/main/kotlin/org/kotlintor/config/TorConfig.kt` | deepen toward C Tor control-flow |
-| `L1:app/config/resolve_addr.c` | D2 | `resolve_addr.c` | `core/src/main/kotlin/org/kotlintor/net/NetworkPolicy.kt;core` | deepen toward C Tor control-flow |
-| `L1:app/config/statefile.c` | D2 | `statefile.c` | `core/src/main/kotlin/org/kotlintor/config/*` | full subsystem_list parity |
-| `L1:core/crypto/hs_ntor.c` | D2 | `hs_ntor.c` | `core/src/main/kotlin/org/kotlintor/crypto/*;core/src/main/ko` | audit hot-path + tests before D3 |
-| `L1:core/crypto/onion_crypto.c` | D2 | `onion_crypto.c` | `core/src/main/kotlin/org/kotlintor/crypto/*` | audit hot-path + tests before D3 |
-| `L1:core/crypto/onion_fast.c` | D2 | `onion_fast.c` | `core/src/main/kotlin/org/kotlintor/crypto/*` | audit hot-path + tests before D3 |
-| `L1:core/crypto/relay_crypto.c` | D2 | `relay_crypto.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircuitCrypto.kt` | audit hot-path + tests before D3 |
-| `L1:core/crypto/relay_crypto_tor1.c` | D2 | `relay_crypto_tor1.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircuitCrypto.kt` | audit hot-path + tests before D3 |
-| `L1:core/mainloop/connection.c` | D2 | `connection.c` | `core/src/main/kotlin/org/kotlintor/link/ConnectionSt.kt;core` | full connection_t mainloop |
-| `L1:core/mainloop/cpuworker.c` | D2 | `cpuworker.c` | `core/src/main/kotlin/org/kotlintor/os/*` | audit hot-path + tests before D3 |
-| `L1:core/mainloop/mainloop.c` | D2 | `mainloop.c` | `core/src/main/kotlin/org/kotlintor/TorDaemon.kt;cli/src/main` | audit hot-path + tests before D3 |
-| `L1:core/mainloop/mainloop_pubsub.c` | D2 | `mainloop_pubsub.c` | `cli/src/main/kotlin/org/kotlintor/cli/Main.kt` | audit hot-path + tests before D3 |
-| `L1:core/mainloop/mainloop_sys.c` | D2 | `mainloop_sys.c` | `cli/src/main/kotlin/org/kotlintor/cli/Main.kt` | audit hot-path + tests before D3 |
-| `L1:core/mainloop/netstatus.c` | D2 | `netstatus.c` | `core/src/main/kotlin/org/kotlintor/status/HeartbeatStatus.kt` | deepen toward C Tor control-flow |
-| `L1:core/mainloop/periodic.c` | D2 | `periodic.c` | `core/src/main/kotlin/org/kotlintor/TorDaemon.kt` | audit hot-path + tests before D3 |
-| `L1:core/or/address_set.c` | D2 | `address_set.c` | `core/src/main/kotlin/org/kotlintor/net/AddressSet.kt` | audit hot-path + tests before D3 |
-| `L1:core/or/channel.c` | D2 | `channel.c` | `core/src/main/kotlin/org/kotlintor/link/OrChannel.kt;core/sr` | deepen toward C Tor control-flow |
-| `L1:core/or/channelpadding.c` | D2 | `channelpadding.c` | `core/src/main/kotlin/org/kotlintor/link/ChannelPadding.kt;co` | audit hot-path + tests before D3 |
-| `L1:core/or/channeltls.c` | D2 | `channeltls.c` | `core/src/main/kotlin/org/kotlintor/link/OrConnection.kt;core` | capped by lite/not-ported |
-| `L1:core/or/circuitbuild.c` | D2 | `circuitbuild.c` | `core/src/main/kotlin/org/kotlintor/circuit/Circuit.kt;core/s` | deepen toward C Tor control-flow |
-| `L1:core/or/circuitlist.c` | D2 | `circuitlist.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircuitList.kt;co` | full purpose matrix / global lists |
-| `L1:core/or/circuitmux.c` | D2 | `circuitmux.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircuitMux.kt;cor` | full cmux queues / policies |
-| `L1:core/or/circuitmux_ewma.c` | D2 | `circuitmux_ewma.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircuitMux.kt;cor` | consensus-tuned EWMA edge cases |
-| `L1:core/or/circuitpadding.c` | D2 | `circuitpadding.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircpadFsm.kt;cor` | live middle ACK / full machines |
-| `L1:core/or/circuitpadding_machines.c` | D2 | `circuitpadding_machines.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircuitPaddingMac` | full WTF-PAD machine tables from C |
-| `L1:core/or/circuitstats.c` | D2 | `circuitstats.c` | `core/src/main/kotlin/org/kotlintor/path/PathBias.kt;core/src` | deepen toward C Tor control-flow |
-| `L1:core/or/circuituse.c` | D2 | `circuituse.c` | `core/src/main/kotlin/org/kotlintor/circuit/Circuit.kt` | deepen toward C Tor control-flow |
-| `L1:core/or/command.c` | D2 | `command.c` | `core/src/main/kotlin/org/kotlintor/circuit/Circuit.kt;core/s` | deepen toward C Tor control-flow |
-| `L1:core/or/conflux.c` | D2 | `conflux.c` | `core/src/main/kotlin/org/kotlintor/circuit/Conflux.kt;core/s` | deepen toward C Tor control-flow |
-| `L1:core/or/conflux_cell.c` | D2 | `conflux_cell.c` | `core/src/main/kotlin/org/kotlintor/circuit/Conflux.kt;core/s` | audit hot-path + tests before D3 |
-| `L1:core/or/conflux_params.c` | D2 | `conflux_params.c` | `core/src/main/kotlin/org/kotlintor/circuit/Conflux.kt` | audit hot-path + tests before D3 |
-| `L1:core/or/conflux_pool.c` | D2 | `conflux_pool.c` | `core/src/main/kotlin/org/kotlintor/circuit/Conflux.kt` | audit hot-path + tests before D3 |
-| `L1:core/or/conflux_sys.c` | D2 | `conflux_sys.c` | `core/src/main/kotlin/org/kotlintor/circuit/ConfluxScheduler.` | deepen toward C Tor control-flow |
-| `L1:core/or/conflux_util.c` | D2 | `conflux_util.c` | `core/src/main/kotlin/org/kotlintor/circuit/Conflux.kt` | audit hot-path + tests before D3 |
-| `L1:core/or/congestion_control_common.c` | D2 | `congestion_control_common.c` | `core/src/main/kotlin/org/kotlintor/circuit/CongestionControl` | audit hot-path + tests before D3 |
-| `L1:core/or/congestion_control_flow.c` | D2 | `congestion_control_flow.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircuitFlowContro` | audit hot-path + tests before D3 |
-| `L1:core/or/congestion_control_vegas.c` | D2 | `congestion_control_vegas.c` | `core/src/main/kotlin/org/kotlintor/circuit/CongestionControl` | audit hot-path + tests before D3 |
-| `L1:core/or/connection_edge.c` | D2 | `connection_edge.c` | `core/src/main/kotlin/org/kotlintor/circuit/ConnectionEdge.kt` | deepen toward C Tor control-flow |
-| `L1:core/or/connection_or.c` | D2 | `connection_or.c` | `core/src/main/kotlin/org/kotlintor/link/OrConnection.kt;core` | remaining edge cases vs connection_or.c; capped by lite/not-ported |
-| `L1:core/or/crypt_path.c` | D2 | `crypt_path.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircuitCrypto.kt;` | audit hot-path + tests before D3 |
-| `L1:core/or/dos.c` | D2 | `dos.c` | `core/src/main/kotlin/org/kotlintor/relay/*;core/src/main/kot` | deepen toward C Tor control-flow |
-| `L1:core/or/dos_config.c` | D2 | `dos_config.c` | `core/src/main/kotlin/org/kotlintor/config/TorConfig.kt;core/` | deepen toward C Tor control-flow |
-| `L1:core/or/dos_sys.c` | D2 | `dos_sys.c` | `core/src/main/kotlin/org/kotlintor/relay/*` | audit hot-path + tests before D3 |
-| `L1:core/or/extendinfo.c` | D2 | `extendinfo.c` | `core/src/main/kotlin/org/kotlintor/circuit/ExtendInfo.kt` | full extendinfo.c helpers |
-| `L1:core/or/ocirc_event.c` | D2 | `ocirc_event.c` | `control/src/main/kotlin/org/kotlintor/control/ControlServer.` | audit hot-path + tests before D3 |
-| `L1:core/or/onion.c` | D2 | `onion.c` | `core/src/main/kotlin/org/kotlintor/circuit/Circuit.kt;core/s` | deepen toward C Tor control-flow |
-| `L1:core/or/or_periodic.c` | D2 | `or_periodic.c` | `core/src/main/kotlin/org/kotlintor/relay/RelayService.kt;cor` | audit hot-path + tests before D3 |
-| `L1:core/or/or_sys.c` | D2 | `or_sys.c` | `core/src/main/kotlin/org/kotlintor/relay/RelayService.kt;cor` | audit hot-path + tests before D3 |
-| `L1:core/or/orconn_event.c` | D2 | `orconn_event.c` | `control/src/main/kotlin/org/kotlintor/control/ControlServer.` | audit hot-path + tests before D3 |
-| `L1:core/or/policies.c` | D2 | `policies.c` | `core/src/main/kotlin/org/kotlintor/net/NetworkPolicy.kt;core` | deepen toward C Tor control-flow |
-| `L1:core/or/protover.c` | D2 | `protover.c` | `core/src/main/kotlin/org/kotlintor/dir/*` | audit hot-path + tests before D3 |
-| `L1:core/or/reasons.c` | D2 | `reasons.c` | `core/src/main/kotlin/org/kotlintor/cell/Reasons.kt` | audit hot-path + tests before D3 |
-| `L1:core/or/relay.c` | D2 | `relay.c` | `core/src/main/kotlin/org/kotlintor/circuit/Circuit.kt;core/s` | deepen toward C Tor control-flow |
-| `L1:core/or/relay_msg.c` | D2 | `relay_msg.c` | `core/src/main/kotlin/org/kotlintor/cell/*;core/src/main/kotl` | deepen toward C Tor control-flow |
-| `L1:core/or/scheduler.c` | D2 | `scheduler.c` | `core/src/main/kotlin/org/kotlintor/link/ChannelScheduler.kt;` | full scheduler policies |
-| `L1:core/or/scheduler_kist.c` | D2 | `scheduler_kist.c` | `core/src/main/kotlin/org/kotlintor/link/ChannelScheduler.kt;` | kernel KIST scheduler_channel full path |
-| `L1:core/or/scheduler_vanilla.c` | D2 | `scheduler_vanilla.c` | `core/src/main/kotlin/org/kotlintor/link/ChannelScheduler.kt` | deepen toward C Tor control-flow |
-| `L1:core/or/sendme.c` | D2 | `sendme.c` | `core/src/main/kotlin/org/kotlintor/circuit/CircuitFlowContro` | audit hot-path + tests before D3 |
-| `L1:core/or/status.c` | D2 | `status.c` | `core/src/main/kotlin/org/kotlintor/status/HeartbeatStatus.kt` | full status.c heartbeat counters |
-| `L1:core/or/trace_probes_circuit.c` | D2 | `trace_probes_circuit.c` | `core/src/main/kotlin/org/kotlintor/circuit/Circuit.kt` | deepen toward C Tor control-flow |
-| `L1:core/or/versions.c` | D2 | `versions.c` | `core/src/main/kotlin/org/kotlintor/link/OrConnection.kt;core` | deepen toward C Tor control-flow |
-| `L1:core/proto/proto_cell.c` | D2 | `proto_cell.c` | `core/src/main/kotlin/org/kotlintor/cell/*;core/src/main/kotl` | audit hot-path + tests before D3 |
-| `L1:core/proto/proto_control0.c` | D2 | `proto_control0.c` | `core/src/main/kotlin/org/kotlintor/link/Control0Peek.kt` | full control0 reject on live control port |
-| `L1:core/proto/proto_ext_or.c` | D2 | `proto_ext_or.c` | `core/src/main/kotlin/org/kotlintor/pt/ExtOrPort.kt` | audit hot-path + tests before D3 |
-| `L1:core/proto/proto_haproxy.c` | D2 | `proto_haproxy.c` | `core/src/main/kotlin/org/kotlintor/net/HaproxyProxyHeader.kt` | PROXY v2 / listener inject path |
-| `L1:core/proto/proto_http.c` | D2 | `proto_http.c` | `core/src/main/kotlin/org/kotlintor/net/*` | audit hot-path + tests before D3 |
-| `L1:core/proto/proto_socks.c` | D2 | `proto_socks.c` | `core/src/main/kotlin/org/kotlintor/net/*;proxy/src/main/kotl` | audit hot-path + tests before D3 |
-| `L1:feature/client/addressmap.c` | D2 | `addressmap.c` | `core/src/main/kotlin/org/kotlintor/net/AutomapAndDnsCache.kt` | deepen toward C Tor control-flow |
-| `L1:feature/client/bridges.c` | D2 | `bridges.c` | `core/src/main/kotlin/org/kotlintor/pt/*;core/src/main/kotlin` | deepen toward C Tor control-flow |
-| `L1:feature/client/circpathbias.c` | D2 | `circpathbias.c` | `core/src/main/kotlin/org/kotlintor/path/PathBias.kt;core/src` | full pathbias use/build FSM |
-| `L1:feature/client/dnsserv.c` | D2 | `dnsserv.c` | `proxy/src/main/kotlin/org/kotlintor/proxy/*;core/src/main/ko` | audit hot-path + tests before D3 |
-| `L1:feature/client/entrynodes.c` | D2 | `entrynodes.c` | `core/src/main/kotlin/org/kotlintor/path/EntryGuardFsm.kt;cor` | deepen toward C Tor control-flow |
-| `L1:feature/client/proxymode.c` | D2 | `proxymode.c` | `proxy/src/main/kotlin/org/kotlintor/proxy/*` | audit hot-path + tests before D3 |
-| `L1:feature/client/transports.c` | D2 | `transports.c` | `core/src/main/kotlin/org/kotlintor/pt/*` | audit hot-path + tests before D3 |
-| `L1:feature/control/btrack.c` | D2 | `btrack.c` | `control/src/main/kotlin/org/kotlintor/control/ControlServer.` | audit hot-path + tests before D3 |
-| `L1:feature/control/btrack_circuit.c` | D2 | `btrack_circuit.c` | `core/src/main/kotlin/org/kotlintor/circuit/Circuit.kt` | deepen toward C Tor control-flow |
-| `L1:feature/control/btrack_orconn.c` | D2 | `btrack_orconn.c` | `control/src/main/kotlin/org/kotlintor/control/ControlServer.` | audit hot-path + tests before D3 |
-| `L1:feature/control/btrack_orconn_cevent.c` | D2 | `btrack_orconn_cevent.c` | `control/src/main/kotlin/org/kotlintor/control/ControlServer.` | audit hot-path + tests before D3 |
-| `L1:feature/control/btrack_orconn_maps.c` | D2 | `btrack_orconn_maps.c` | `control/src/main/kotlin/org/kotlintor/control/ControlServer.` | audit hot-path + tests before D3 |
+| `L3:feature/nodelist/nodefamily_format` | D2 | `nodefamily_format` | `core/src/main/kotlin/org/kotlintor/dir/NodeFamily.kt;core/sr` | op-level mapping unaudited for nodefamily_format |
+| `L3:feature/nodelist/nodefamily_free_` | D2 | `nodefamily_free_` | `core/src/main/kotlin/org/kotlintor/dir/NodeFamily.kt;core/sr` | op-level mapping unaudited for nodefamily_free_ |
+| `L3:feature/nodelist/nodefamily_free_all` | D2 | `nodefamily_free_all` | `core/src/main/kotlin/org/kotlintor/dir/NodeFamily.kt;core/sr` | op-level mapping unaudited for nodefamily_free_all |
+| `L3:feature/nodelist/nodefamily_from_members` | D2 | `nodefamily_from_members` | `core/src/main/kotlin/org/kotlintor/dir/NodeFamily.kt;core/sr` | op-level mapping unaudited for nodefamily_from_members |
+| `L3:feature/nodelist/nodefamily_parse` | D2 | `nodefamily_parse` | `core/src/main/kotlin/org/kotlintor/dir/NodeFamily.kt;core/sr` | op-level mapping unaudited for nodefamily_parse |
+| `L3:feature/nodelist/or_handshake_certs_check_both` | D2 | `or_handshake_certs_check_both` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for or_handshake_certs_check_both |
+| `L3:feature/nodelist/or_handshake_certs_ed25519_ok` | D2 | `or_handshake_certs_ed25519_ok` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for or_handshake_certs_ed25519_ok |
+| `L3:feature/nodelist/or_handshake_certs_free_` | D2 | `or_handshake_certs_free_` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for or_handshake_certs_free_ |
+| `L3:feature/nodelist/or_handshake_certs_new` | D2 | `or_handshake_certs_new` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for or_handshake_certs_new |
+| `L3:feature/nodelist/or_handshake_certs_rsa_ok` | D2 | `or_handshake_certs_rsa_ok` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for or_handshake_certs_rsa_ok |
+| `L3:feature/nodelist/refresh_all_country_info` | D2 | `refresh_all_country_info` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for refresh_all_country_info |
+| `L3:feature/nodelist/router_add_extrainfo_to_routerlist` | D2 | `router_add_extrainfo_to_routerlist` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_add_extrainfo_to_routerlist |
+| `L3:feature/nodelist/router_add_running_nodes_to_smartlist` | D2 | `router_add_running_nodes_to_smartlist` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_add_running_nodes_to_smartlist |
+| `L3:feature/nodelist/router_add_to_routerlist` | D2 | `router_add_to_routerlist` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_add_to_routerlist |
+| `L3:feature/nodelist/router_addr_is_trusted_dir_type` | D2 | `router_addr_is_trusted_dir_type` | `core/src/main/kotlin/org/kotlintor/dir/DirList.kt` | op-level mapping unaudited for router_addr_is_trusted_dir_type |
+| `L3:feature/nodelist/router_can_choose_node` | D2 | `router_can_choose_node` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_can_choose_node |
+| `L3:feature/nodelist/router_choose_random_node` | D2 | `router_choose_random_node` | `core/src/main/kotlin/org/kotlintor/dir/NodeSelect.kt;core/sr` | op-level mapping unaudited for router_choose_random_node |
+| `L3:feature/nodelist/router_describe` | D2 | `router_describe` | `core/src/main/kotlin/org/kotlintor/dir/Describe.kt;core/src/` | op-level mapping unaudited for router_describe |
+| `L3:feature/nodelist/router_differences_are_cosmetic` | D2 | `router_differences_are_cosmetic` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_differences_are_cosmetic |
+| `L3:feature/nodelist/router_digest_is_fallback_dir` | D2 | `router_digest_is_fallback_dir` | `core/src/main/kotlin/org/kotlintor/dir/DirList.kt` | op-level mapping unaudited for router_digest_is_fallback_dir |
+| `L3:feature/nodelist/router_dir_conn_should_skip_reachable_address_check` | D2 | `router_dir_conn_should_skip_reachable_address_check` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_dir_conn_should_skip_reachable_address_che |
+| `L3:feature/nodelist/router_get_advertised_bandwidth` | D2 | `router_get_advertised_bandwidth` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_get_advertised_bandwidth |
+| `L3:feature/nodelist/router_get_advertised_bandwidth_capped` | D2 | `router_get_advertised_bandwidth_capped` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_get_advertised_bandwidth_capped |
+| `L3:feature/nodelist/router_get_all_orports` | D2 | `router_get_all_orports` | `core/src/main/kotlin/org/kotlintor/dir/RouterInfo.kt;core/sr` | op-level mapping unaudited for router_get_all_orports |
+| `L3:feature/nodelist/router_get_by_descriptor_digest` | D2 | `router_get_by_descriptor_digest` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_get_by_descriptor_digest |
+| `L3:feature/nodelist/router_get_by_id_digest` | D2 | `router_get_by_id_digest` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_get_by_id_digest |
+| `L3:feature/nodelist/router_get_fallback_dir_servers` | D2 | `router_get_fallback_dir_servers` | `core/src/main/kotlin/org/kotlintor/dir/DirList.kt` | op-level mapping unaudited for router_get_fallback_dir_servers |
+| `L3:feature/nodelist/router_get_fallback_dir_servers_mutable` | D2 | `router_get_fallback_dir_servers_mutable` | `core/src/main/kotlin/org/kotlintor/dir/DirList.kt` | op-level mapping unaudited for router_get_fallback_dir_servers_mutable |
+| `L3:feature/nodelist/router_get_fallback_dirserver_by_digest` | D2 | `router_get_fallback_dirserver_by_digest` | `core/src/main/kotlin/org/kotlintor/dir/DirList.kt` | op-level mapping unaudited for router_get_fallback_dirserver_by_digest |
+| `L3:feature/nodelist/router_get_mutable_by_digest` | D2 | `router_get_mutable_by_digest` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_get_mutable_by_digest |
+| `L3:feature/nodelist/router_get_my_share_of_directory_requests` | D2 | `router_get_my_share_of_directory_requests` | `core/src/main/kotlin/org/kotlintor/dir/NodeSelect.kt;core/sr` | op-level mapping unaudited for router_get_my_share_of_directory_requests |
+| `L3:feature/nodelist/router_get_orport` | D2 | `router_get_orport` | `core/src/main/kotlin/org/kotlintor/dir/RouterInfo.kt;core/sr` | op-level mapping unaudited for router_get_orport |
+| `L3:feature/nodelist/router_get_routerlist` | D2 | `router_get_routerlist` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_get_routerlist |
+| `L3:feature/nodelist/router_get_trusted_dir_servers` | D2 | `router_get_trusted_dir_servers` | `core/src/main/kotlin/org/kotlintor/dir/DirList.kt` | op-level mapping unaudited for router_get_trusted_dir_servers |
+| `L3:feature/nodelist/router_get_trusted_dir_servers_mutable` | D2 | `router_get_trusted_dir_servers_mutable` | `core/src/main/kotlin/org/kotlintor/dir/DirList.kt` | op-level mapping unaudited for router_get_trusted_dir_servers_mutable |
+| `L3:feature/nodelist/router_get_trusteddirserver_by_digest` | D2 | `router_get_trusteddirserver_by_digest` | `core/src/main/kotlin/org/kotlintor/dir/DirList.kt` | op-level mapping unaudited for router_get_trusteddirserver_by_digest |
+| `L3:feature/nodelist/router_get_verbose_nickname` | D2 | `router_get_verbose_nickname` | `core/src/main/kotlin/org/kotlintor/dir/Describe.kt;core/src/` | op-level mapping unaudited for router_get_verbose_nickname |
+| `L3:feature/nodelist/router_has_orport` | D2 | `router_has_orport` | `core/src/main/kotlin/org/kotlintor/dir/RouterInfo.kt;core/sr` | op-level mapping unaudited for router_has_orport |
+| `L3:feature/nodelist/router_is_already_dir_fetching` | D2 | `router_is_already_dir_fetching` | `core/src/main/kotlin/org/kotlintor/dir/NodeSelect.kt;core/sr` | op-level mapping unaudited for router_is_already_dir_fetching |
+| `L3:feature/nodelist/router_load_extrainfo_from_string` | D2 | `router_load_extrainfo_from_string` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_load_extrainfo_from_string |
+| `L3:feature/nodelist/router_load_routers_from_string` | D2 | `router_load_routers_from_string` | `core/src/main/kotlin/org/kotlintor/dir/RouterList.kt;core/sr` | op-level mapping unaudited for router_load_routers_from_string |
+| `L3:feature/nodelist/router_pick_directory_server` | D2 | `router_pick_directory_server` | `core/src/main/kotlin/org/kotlintor/dir/NodeSelect.kt;core/sr` | op-level mapping unaudited for router_pick_directory_server |
+| `L3:feature/nodelist/router_pick_directory_server_impl` | D2 | `router_pick_directory_server_impl` | `core/src/main/kotlin/org/kotlintor/dir/NodeSelect.kt;core/sr` | op-level mapping unaudited for router_pick_directory_server_impl |
+| `L3:feature/nodelist/router_pick_fallback_dirserver` | D2 | `router_pick_fallback_dirserver` | `core/src/main/kotlin/org/kotlintor/dir/NodeSelect.kt;core/sr` | op-level mapping unaudited for router_pick_fallback_dirserver |
+| `L3:feature/nodelist/router_pick_trusteddirserver` | D2 | `router_pick_trusteddirserver` | `core/src/main/kotlin/org/kotlintor/dir/NodeSelect.kt;core/sr` | op-level mapping unaudited for router_pick_trusteddirserver |
+| `L3:feature/nodelist/router_purpose_from_string` | D2 | `router_purpose_from_string` | `core/src/main/kotlin/org/kotlintor/dir/RouterInfo.kt;core/sr` | op-level mapping unaudited for router_purpose_from_string |
+| `L3:feature/nodelist/router_purpose_to_string` | D2 | `router_purpose_to_string` | `core/src/main/kotlin/org/kotlintor/dir/RouterInfo.kt;core/sr` | op-level mapping unaudited for router_purpose_to_string |
+| `L3:feature/nodelist/routerinfo_get_ed25519_id` | D2 | `routerinfo_get_ed25519_id` | `core/src/main/kotlin/org/kotlintor/dir/RouterInfo.kt;core/sr` | op-level mapping unaudited for routerinfo_get_ed25519_id |
+| `L3:feature/nodelist/routerset_add_unknown_ccs` | D2 | `routerset_add_unknown_ccs` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_add_unknown_ccs |
+| `L3:feature/nodelist/routerset_contains` | D2 | `routerset_contains` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_contains |
+| `L3:feature/nodelist/routerset_contains_bridge` | D2 | `routerset_contains_bridge` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_contains_bridge |
+| `L3:feature/nodelist/routerset_contains_extendinfo` | D2 | `routerset_contains_extendinfo` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_contains_extendinfo |
+| `L3:feature/nodelist/routerset_contains_node` | D2 | `routerset_contains_node` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_contains_node |
+| `L3:feature/nodelist/routerset_contains_router` | D2 | `routerset_contains_router` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_contains_router |
+| `L3:feature/nodelist/routerset_contains_routerstatus` | D2 | `routerset_contains_routerstatus` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_contains_routerstatus |
+| `L3:feature/nodelist/routerset_equal` | D2 | `routerset_equal` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_equal |
+| `L3:feature/nodelist/routerset_free_` | D2 | `routerset_free_` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_free_ |
+| `L3:feature/nodelist/routerset_get_all_nodes` | D2 | `routerset_get_all_nodes` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_get_all_nodes |
+| `L3:feature/nodelist/routerset_get_countryname` | D2 | `routerset_get_countryname` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_get_countryname |
+| `L3:feature/nodelist/routerset_is_empty` | D2 | `routerset_is_empty` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_is_empty |
+| `L3:feature/nodelist/routerset_is_list` | D2 | `routerset_is_list` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_is_list |
+| `L3:feature/nodelist/routerset_len` | D2 | `routerset_len` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_len |
+| `L3:feature/nodelist/routerset_needs_geoip` | D2 | `routerset_needs_geoip` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_needs_geoip |
+| `L3:feature/nodelist/routerset_new` | D2 | `routerset_new` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_new |
+| `L3:feature/nodelist/routerset_parse` | D2 | `routerset_parse` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_parse |
+| `L3:feature/nodelist/routerset_refresh_countries` | D2 | `routerset_refresh_countries` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_refresh_countries |
+| `L3:feature/nodelist/routerset_subtract_nodes` | D2 | `routerset_subtract_nodes` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_subtract_nodes |
+| `L3:feature/nodelist/routerset_to_string` | D2 | `routerset_to_string` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_to_string |
+| `L3:feature/nodelist/routerset_union` | D2 | `routerset_union` | `core/src/main/kotlin/org/kotlintor/dir/RouterSet.kt;core/src` | op-level mapping unaudited for routerset_union |
+| `L3:feature/nodelist/routerstatus_describe` | D2 | `routerstatus_describe` | `core/src/main/kotlin/org/kotlintor/dir/Describe.kt;core/src/` | op-level mapping unaudited for routerstatus_describe |
+| `L3:feature/nodelist/routerstatus_format_entry` | D2 | `routerstatus_format_entry` | `core/src/main/kotlin/org/kotlintor/dir/FmtRouterStatus.kt;co` | op-level mapping unaudited for routerstatus_format_entry |
+| `L3:feature/nodelist/scale_array_elements_to_u64` | D2 | `scale_array_elements_to_u64` | `core/src/main/kotlin/org/kotlintor/dir/NodeSelect.kt;core/sr` | op-level mapping unaudited for scale_array_elements_to_u64 |
+| `L3:feature/nodelist/tor_cert_checksig` | D2 | `tor_cert_checksig` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for tor_cert_checksig |
+| `L3:feature/nodelist/tor_cert_create_ed25519` | D2 | `tor_cert_create_ed25519` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for tor_cert_create_ed25519 |
+| `L3:feature/nodelist/tor_cert_create_raw` | D2 | `tor_cert_create_raw` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for tor_cert_create_raw |
+| `L3:feature/nodelist/tor_cert_describe_signature_status` | D2 | `tor_cert_describe_signature_status` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for tor_cert_describe_signature_status |
+| `L3:feature/nodelist/tor_cert_encode_ed22519` | D2 | `tor_cert_encode_ed22519` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for tor_cert_encode_ed22519 |
+| `L3:feature/nodelist/tor_cert_eq` | D2 | `tor_cert_eq` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for tor_cert_eq |
+| `L3:feature/nodelist/tor_cert_free_` | D2 | `tor_cert_free_` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for tor_cert_free_ |
+| `L3:feature/nodelist/tor_cert_get_checkable_sig` | D2 | `tor_cert_get_checkable_sig` | `core/src/main/kotlin/org/kotlintor/dir/TorCert.kt;core/src/m` | op-level mapping unaudited for tor_cert_get_checkable_sig |
 
 ## Process
 

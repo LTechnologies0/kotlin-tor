@@ -2,7 +2,9 @@ package org.kotlintor.dir
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.kotlintor.util.readTextCompat
 import org.kotlintor.util.toHex
+import org.kotlintor.util.writeTextCompat
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -29,7 +31,7 @@ class DirectoryClient(
     suspend fun fetchConsensus(force: Boolean = false): Consensus = withContext(Dispatchers.IO) {
         val cached = cacheDir.resolve("cached-consensus")
         if (!force && Files.exists(cached)) {
-            val text = Files.readString(cached)
+            val text = cached.readTextCompat()
             val c = ConsensusParser.parse(text)
             if (c.isValidAt()) return@withContext c
         }
@@ -40,20 +42,23 @@ class DirectoryClient(
                 val body = httpGet(url)
                 val text = maybeInflate(body)
                 val consensus = ConsensusParser.parse(text)
-                Files.writeString(cached, text)
+                cached.writeTextCompat(text)
                 return@withContext consensus
             } catch (e: Exception) {
                 last = e
             }
         }
-        throw IllegalStateException("failed to fetch consensus from all authorities", last)
+        throw IllegalStateException(
+            "failed to fetch consensus from all authorities: ${last?.javaClass?.simpleName}: ${last?.message}",
+            last,
+        )
     }
 
     /** Fetch microdescriptor-flavored consensus (preferred for HSDir ring completeness). */
     suspend fun fetchMicrodescConsensus(force: Boolean = false): Consensus = withContext(Dispatchers.IO) {
         val cached = cacheDir.resolve("cached-microdesc-consensus")
         if (!force && Files.exists(cached)) {
-            val text = Files.readString(cached)
+            val text = cached.readTextCompat()
             val c = MicrodescConsensusParser.parse(text)
             if (c.isValidAt()) return@withContext c
         }
@@ -72,13 +77,16 @@ class DirectoryClient(
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING,
                     )
                 }
-                Files.writeString(cached, text)
+                cached.writeTextCompat(text)
                 return@withContext consensus
             } catch (e: Exception) {
                 last = e
             }
         }
-        throw IllegalStateException("failed to fetch microdesc consensus", last)
+        throw IllegalStateException(
+            "failed to fetch microdesc consensus: ${last?.javaClass?.simpleName}: ${last?.message}",
+            last,
+        )
     }
 
     /** Current + previous microdesc consensuses (previous may be expired but still useful for HSDir lag). */
@@ -86,7 +94,7 @@ class DirectoryClient(
         val current = fetchMicrodescConsensus(force)
         val prevFile = cacheDir.resolve("cached-microdesc-consensus.prev")
         val prev = if (Files.exists(prevFile)) {
-            runCatching { MicrodescConsensusParser.parse(Files.readString(prevFile)) }.getOrNull()
+            runCatching { MicrodescConsensusParser.parse(prevFile.readTextCompat()) }.getOrNull()
         } else {
             null
         }

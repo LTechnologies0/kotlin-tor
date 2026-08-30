@@ -7,9 +7,12 @@ import org.kotlintor.util.SecureRandomSource
 class HsClientAuthTest {
     @Test
     fun `generate auth-client line`() {
-        val cred = HsClientAuth.generate("alice")
-        val enc = SecureRandomSource.nextBytes(16)
-        val line = HsClientAuth.authClientLine(cred, enc)
+        val entry = HsClientAuth.AuthClientEntry(
+            clientId = SecureRandomSource.nextBytes(8),
+            iv = SecureRandomSource.nextBytes(16),
+            encryptedCookie = SecureRandomSource.nextBytes(16),
+        )
+        val line = HsClientAuth.authClientLine(entry)
         assertTrue(line.startsWith("auth-client "))
         assertTrue(line.split(' ').size >= 4)
     }

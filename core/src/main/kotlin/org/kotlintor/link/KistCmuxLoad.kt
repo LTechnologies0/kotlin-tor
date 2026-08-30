@@ -5,7 +5,7 @@ import org.kotlintor.circuit.EwmaCircuitMuxPolicy
 
 /**
  * Simulate multi-circuit cmux flush under a tight KIST write budget
- * (C Tor `scheduler_kist` + `circuitmux` under load lite).
+ * (C Tor `scheduler_kist.c` + `circuitmux.c` under load).
  *
  * Enqueues [cellsPerCirc] cells on each of [nCircuits] circuits, then drains
  * via [CircuitMux.flush] gated by [WriteBudget] until empty or [maxRounds].

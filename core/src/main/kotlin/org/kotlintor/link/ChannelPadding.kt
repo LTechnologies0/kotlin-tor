@@ -137,3 +137,66 @@ class ChannelPaddingController(
         return 250
     }
 }
+
+/**
+ * Naming primary facade for `channelpadding_*` L3 ops.
+ */
+object ChannelPadding {
+    fun newController(
+        params: ChannelPaddingParams = ChannelPaddingParams(),
+        isClient: Boolean = true,
+    ): ChannelPaddingController =
+        ChannelPaddingController(params = params, isClientChannel = isClient)
+
+    /** C Tor `channelpadding_decide_to_pad_channel`. */
+    fun decideToPadChannel(
+        ctrl: ChannelPaddingController,
+        nowMs: Long = System.currentTimeMillis(),
+    ): ChannelPaddingDecision = ctrl.decide(nowMs)
+
+    /** C Tor `channelpadding_disable_padding_on_channel`. */
+    fun disablePaddingOnChannel(ctrl: ChannelPaddingController) = ctrl.disable()
+
+    /** C Tor `channelpadding_get_channel_idle_timeout` — midpoint of ito range (ms→sec). */
+    fun getChannelIdleTimeout(params: ChannelPaddingParams): Int =
+        ((params.itoLow() + params.itoHigh()) / 2 / 1000).coerceAtLeast(1)
+
+    /** C Tor `channelpadding_get_circuits_available_timeout`. */
+    fun getCircuitsAvailableTimeout(params: ChannelPaddingParams, client: Boolean): Int =
+        if (client) params.connTimeoutClientsSec else params.connTimeoutRelaysSec
+
+    fun logHeartbeat(ctrl: ChannelPaddingController): String =
+        "pad enabled=${ctrl.enabled} lastCell=${ctrl.lastCellAtMs}"
+
+    /** C Tor `channelpadding_new_consensus_params`. */
+    fun newConsensusParams(params: Map<String, Int>, reduced: Boolean = false): ChannelPaddingParams =
+        ChannelPaddingParams.fromConsensus(params, reduced)
+
+    /** C Tor `channelpadding_reduce_padding_on_channel`. */
+    fun reducePaddingOnChannel(ctrl: ChannelPaddingController) = ctrl.reduce()
+
+    /** C Tor `channelpadding_send_enable_command` — START negotiate payload. */
+    fun sendEnableCommand(lowMs: Int = 1_500, highMs: Int = 9_500): ByteArray {
+        ctrlApplyStart(lowMs, highMs)
+        return byteArrayOf(
+            PaddingNegotiate.COMMAND_START.toByte(),
+            ((lowMs ushr 8) and 0xff).toByte(),
+            (lowMs and 0xff).toByte(),
+            ((highMs ushr 8) and 0xff).toByte(),
+            (highMs and 0xff).toByte(),
+        )
+    }
+
+    private fun ctrlApplyStart(lowMs: Int, highMs: Int) {
+        // encoding-only helper; controller apply is via [updatePaddingForChannel]
+        require(highMs >= lowMs)
+    }
+
+    /** C Tor `channelpadding_update_padding_for_channel`. */
+    fun updatePaddingForChannel(
+        ctrl: ChannelPaddingController,
+        cmd: Int,
+        lowMs: Int,
+        highMs: Int,
+    ) = ctrl.applyNegotiate(cmd, lowMs, highMs)
+}

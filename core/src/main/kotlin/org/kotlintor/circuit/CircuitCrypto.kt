@@ -50,6 +50,9 @@ class HopCrypto private constructor(
     /** Running digest after the last recognized inbound cell (SENDME v1). */
     fun inboundDigest(): ByteArray = backDigest.peek()
 
+    /** Running digest after the last originated outbound cell (SENDME v1 expect queue). */
+    fun outboundDigest(): ByteArray = fwdDigest.peek()
+
     /** Destination hop: authenticate + encrypt. */
     fun originateOutbound(relayPayload: ByteArray): ByteArray {
         val work = relayPayload.copyOf()
@@ -158,6 +161,9 @@ class CircuitLayerCake {
 
     fun inboundDigestAt(hopIndex: Int): ByteArray = hops[hopIndex].inboundSendmeTag()
 
+    /** Exit-hop outbound tag after the last [encryptRelay] (for SENDME expect queue). */
+    fun outboundDigestAtExit(): ByteArray = hops.last().outboundSendmeTag()
+
     val hopCount: Int get() = hops.size
 
     fun encryptRelay(cell: RelayCell, cellCommand: Int = org.kotlintor.cell.CellCommand.RELAY.id): ByteArray {
@@ -203,7 +209,11 @@ fun buildCreate2Payload(htype: Int, handshake: ByteArray): ByteArray {
 }
 
 fun parseCreated2Payload(payload: ByteArray): ByteArray {
+    require(payload.size >= 2) { "CREATED2 payload too short" }
     val hlen = ((payload[0].toInt() and 0xff) shl 8) or (payload[1].toInt() and 0xff)
+    require(hlen >= 0 && 2 + hlen <= payload.size) {
+        "CREATED2 handshake length $hlen exceeds payload ${payload.size}"
+    }
     return payload.copyOfRange(2, 2 + hlen)
 }
 

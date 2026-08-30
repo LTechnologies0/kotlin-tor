@@ -33,7 +33,8 @@ class VpnTunTorSession(
         scaffolding = scaffolding,
     )
 
-    fun start() {
+    fun start(torReady: Boolean = true) {
+        check(torReady) { "OnionTunnel refuse start: Tor not bootstrapped" }
         // Bootstrap gate: protector must already be installed via attachVpn.
         tunnel.markBootstrapped()
         tunnel.start()

@@ -252,4 +252,51 @@ object HsNtor {
             forwardKey = backwardKey,
             backwardKey = forwardKey,
         )
+
+    // --- C Tor `hs_ntor.h` op aliases (L3) ---
+
+    /** C Tor `hs_ntor_client_get_introduce1_keys`. */
+    fun hsNtorClientGetIntroduce1Keys(state: ClientState): Pair<ByteArray, ByteArray> =
+        introduceKeys(state)
+
+    /** C Tor `hs_ntor_service_get_introduce1_keys` — same KDF as client intro keys. */
+    fun hsNtorServiceGetIntroduce1Keys(
+        encPrivate: ByteArray,
+        encPublic: ByteArray,
+        authKey: ByteArray,
+        subcredential: ByteArray,
+        clientPk: ByteArray,
+    ): Pair<ByteArray, ByteArray> {
+        val bx = Curve25519.sharedSecret(encPrivate, clientPk)
+        val secretInput = concat(
+            bx, authKey, clientPk, encPublic, PROTOID, T_HSENC, M_HSEXPAND, subcredential,
+        )
+        val hsKeys = Shake256.xof(secretInput, S_KEY_LEN + MAC_LEN)
+        return hsKeys.copyOfRange(0, S_KEY_LEN) to hsKeys.copyOfRange(S_KEY_LEN, S_KEY_LEN + MAC_LEN)
+    }
+
+    /** C Tor `hs_ntor_service_get_introduce1_keys_multi` — one client. */
+    fun hsNtorServiceGetIntroduce1KeysMulti(
+        encPrivate: ByteArray,
+        encPublic: ByteArray,
+        authKey: ByteArray,
+        subcredential: ByteArray,
+        clientPks: List<ByteArray>,
+    ): List<Pair<ByteArray, ByteArray>> =
+        clientPks.map { hsNtorServiceGetIntroduce1Keys(encPrivate, encPublic, authKey, subcredential, it) }
+
+    /** C Tor `hs_ntor_circuit_key_expansion`. */
+    fun hsNtorCircuitKeyExpansion(ntorKeySeed: ByteArray): HopKeyMaterial =
+        expandRendezvousKeys(ntorKeySeed)
+
+    /** C Tor `hs_ntor_client_get_rendezvous1_keys` / finish REND2. */
+    fun hsNtorClientGetRendezvous1Keys(state: ClientState, serverHandshake: ByteArray): HopKeyMaterial =
+        clientFinishRendezvous(state, serverHandshake)
+
+    /** C Tor `hs_ntor_service_get_rendezvous1_keys` — from service intro result. */
+    fun hsNtorServiceGetRendezvous1Keys(result: ServiceIntroResult): HopKeyMaterial = result.hopKeys
+
+    /** C Tor `hs_ntor_client_rendezvous2_mac_is_good`. */
+    fun hsNtorClientRendezvous2MacIsGood(state: ClientState, serverHandshake: ByteArray): Boolean =
+        runCatching { clientFinishRendezvous(state, serverHandshake) }.isSuccess
 }

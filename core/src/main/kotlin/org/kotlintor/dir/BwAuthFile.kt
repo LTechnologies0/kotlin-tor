@@ -94,11 +94,15 @@ class MeasuredBwCache {
         }
     }
 
+    fun clear() {
+        byId.clear()
+    }
+
     val size: Int get() = byId.size
 }
 
 /**
- * Lite vote collator (C Tor `dircollate.c`): group router `w` lines by identity
+ * Vote collator (C Tor `dircollate.c`): group router `w` lines by identity
  * token and emit median Bandwidth= for a consensus body fragment.
  */
 object DirCollator {

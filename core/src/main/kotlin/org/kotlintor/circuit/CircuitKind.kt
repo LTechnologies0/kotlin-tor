@@ -30,7 +30,7 @@ sealed class CircuitKind {
      */
     data class Or(
         override val circId: Long,
-        override val purpose: CircuitPurpose = CircuitPurpose.GENERAL,
+        override val purpose: CircuitPurpose = CircuitPurpose.OR,
         val nextCircId: Long? = null,
         val isExit: Boolean = false,
         val isDir: Boolean = false,
@@ -49,5 +49,14 @@ class CircuitMeta(
     val purpose: CircuitPurpose get() = kind.purpose
     /** C Tor circuitlist dirty bit (streams attached / used for exit). */
     @Volatile var dirty: Boolean = false
+    /** C Tor `marked_for_close` — deferred removal via [CircuitList.closeAllMarked]. */
+    @Volatile var markedForClose: Boolean = false
+    @Volatile var state: CircuitState = CircuitState.BUILDING
     @Volatile var timestampCreatedMs: Long = System.currentTimeMillis()
+    @Volatile var channelGid: Long = 0
+    @Volatile var edgeStreamId: Long = 0
+    @Volatile var testingCellStats: Int = 0
+    @Volatile var pathLength: Int = (kind as? CircuitKind.Origin)?.pathLength ?: 0
+    @Volatile var cpathOpenedLen: Int = 0
+    val cpath: MutableList<ExtendInfo> = mutableListOf()
 }

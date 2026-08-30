@@ -13,6 +13,11 @@ interface VpnTunnel {
     /** Protect [fd] from VPN routing (VpnService.protect). */
     fun protect(fd: Int): Boolean
 
+    /** Prefer this on Android — [android.net.VpnService.protect(Socket)]. */
+    fun protectSocket(socket: java.net.Socket): Boolean = protect(
+        org.kotlintor.os.PlatformNatives.socketFd(socket) ?: -1,
+    )
+
     /** Optional: establish TUN and return its fd; null if engine should not manage TUN. */
     fun establishTun(mtu: Int = 1500): Int? = null
 

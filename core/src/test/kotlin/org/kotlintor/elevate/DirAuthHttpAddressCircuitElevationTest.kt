@@ -62,7 +62,8 @@ class DirAuthHttpAddressCircuitElevationTest {
         )
         assertEquals(45, cfg.newCircuitPeriodSec)
         assertFalse(cfg.learnCircuitBuildTimeout)
-        assertEquals(SchedulerType.KIST, ChannelScheduler.select(cfg.schedulers))
+        // Full KIST opt-in only; default select falls through to VANILLA.
+        assertEquals(SchedulerType.VANILLA, ChannelScheduler.select(cfg.schedulers))
     }
 
     @Test

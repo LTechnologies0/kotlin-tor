@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import org.kotlintor.config.ListenSpec
 import org.kotlintor.link.ConnectionTable
 import org.kotlintor.link.ConnectionType
@@ -23,10 +24,12 @@ import java.net.ServerSocket
  */
 class UdpTorGatewayServer(
     private val scope: CoroutineScope,
+    private val maxConcurrent: Int = ProxyAcceptLimits.DEFAULT_TCP,
 ) {
     private var job: Job? = null
     private var server: ServerSocket? = null
     private var listenerHandle: ListenerConnection? = null
+    private val gate: Semaphore = ProxyAcceptLimits.semaphore(maxConcurrent)
 
     fun start(listen: ListenSpec) {
         val ss = ServerSocket()
@@ -38,11 +41,16 @@ class UdpTorGatewayServer(
         job = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val sock = runCatching { ss.accept() }.getOrNull() ?: break
+                if (!gate.tryAcquire()) {
+                    runCatching { sock.close() }
+                    continue
+                }
                 launch {
                     try {
                         runUdpGateway(SocketBytePipe(sock))
                     } finally {
                         runCatching { sock.close() }
+                        gate.release()
                     }
                 }
             }

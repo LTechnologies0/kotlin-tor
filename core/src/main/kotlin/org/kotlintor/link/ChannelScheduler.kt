@@ -6,8 +6,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * Channel write scheduler types from C Tor `scheduler.h`.
  *
- * Full KIST socket-accounting is not ported; this provides the type switch and
- * a byte-budget flush gate so OR connections can pace writes like KIST-Lite.
+ * Full KIST socket-accounting remains thinner; this provides the type switch and
+ * a byte-budget flush gate so OR connections can pace writes like KIST_LITE.
  */
 enum class SchedulerType {
     NONE,
@@ -29,20 +29,29 @@ object ChannelScheduler {
             }
         }
 
-    /** Prefer first supported type (KIST → KIST_LITE → VANILLA). */
+    /**
+     * Prefer first supported type. Full KIST (python3 TCP_INFO) is **opt-in only** via
+     * [org.kotlintor.os.LinuxTcpInfo.isFullKistEnabled] — never select it merely because
+     * `/usr/bin/python3` exists. Default to KIST_LITE / VANILLA.
+     */
     fun select(preferred: List<SchedulerType>): SchedulerType {
+        val fullKistOk = org.kotlintor.os.LinuxTcpInfo.isFullKistEnabled()
         for (t in preferred) {
             when (t) {
-                SchedulerType.KIST, SchedulerType.KIST_LITE, SchedulerType.VANILLA -> return t
+                SchedulerType.KIST -> if (fullKistOk) return t else continue
+                SchedulerType.KIST_LITE, SchedulerType.VANILLA -> return t
                 SchedulerType.NONE -> continue
             }
         }
+        // Preference listed KIST but full mode disabled and no lite/vanilla listed.
+        if (preferred.any { it == SchedulerType.KIST }) return SchedulerType.KIST_LITE
         return SchedulerType.VANILLA
     }
 }
 
+
 /**
- * Global pending-channel run queue (C Tor `scheduler_channel_*` / pending list lite).
+ * Global pending-channel run queue (C Tor `scheduler_channel_*` / pending list).
  *
  * Channels with outbuf cells move to PENDING; [drain] invokes registered flush
  * callbacks until idle or [maxChannels] processed.

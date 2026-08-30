@@ -27,6 +27,32 @@ data class Cell(
 
     companion object {
         const val FIXED_PAYLOAD_LEN = 509
+        /**
+         * Max variable-cell payload accepted on the wire (DoS bound).
+         * u16 allows 65535; we refuse larger-than-this before allocating.
+         * Large enough for real CERTS/AUTHENTICATE; below unbounded peer floods.
+         */
+        const val MAX_VAR_CELL_PAYLOAD: Int = 32_768
+        /** Fixed cell total size with 4-byte circ_id: 4 + 1 + 509. */
+        const val CELL_NETWORK_SIZE_V4: Int = 514
+        /** Fixed cell total size with 2-byte circ_id: 2 + 1 + 509. */
+        const val CELL_NETWORK_SIZE_V3: Int = 512
+        const val CIRC_ID_SIZE_V4: Int = 4
+        const val CIRC_ID_SIZE_V3: Int = 2
+        const val VAR_CELL_HEADER_SIZE_V4: Int = 7 // 4 circ + 1 cmd + 2 len
+        const val VAR_CELL_HEADER_SIZE_V3: Int = 5 // 2 circ + 1 cmd + 2 len
+
+        /** C Tor `get_cell_network_size` — wideCircIds ⇒ link protocol ≥ 4. */
+        fun getCellNetworkSize(wideCircIds: Boolean = true): Int =
+            if (wideCircIds) CELL_NETWORK_SIZE_V4 else CELL_NETWORK_SIZE_V3
+
+        /** C Tor `get_circ_id_size`. */
+        fun getCircIdSize(wideCircIds: Boolean = true): Int =
+            if (wideCircIds) CIRC_ID_SIZE_V4 else CIRC_ID_SIZE_V3
+
+        /** C Tor `get_var_cell_header_size`. */
+        fun getVarCellHeaderSize(wideCircIds: Boolean = true): Int =
+            if (wideCircIds) VAR_CELL_HEADER_SIZE_V4 else VAR_CELL_HEADER_SIZE_V3
     }
 }
 
@@ -52,27 +78,66 @@ object CellCodec {
         out.flush()
     }
 
+    /**
+     * Read the next known cell. Unknown commands are drained and skipped
+     * (tor-spec: cmds ≥128 are variable-length; others fixed 509).
+     * Oversize variable payloads throw [java.io.IOException] (fail-closed).
+     */
     fun read(input: InputStream, circIdLen: Int = 4): Cell {
         require(circIdLen == 2 || circIdLen == 4)
-        val circBytes = input.readNBytes(circIdLen)
-        if (circBytes.size < circIdLen) throw EOFException("truncated circ_id")
-        val cmdByte = input.read()
-        if (cmdByte < 0) throw EOFException("truncated command")
-        val command = CellCommand.fromId(cmdByte)
-        val circId = if (circIdLen == 2) readU16be(circBytes, 0).toLong() else readU32be(circBytes, 0)
-        val payload = if (command.variable) {
+        while (true) {
+            val circBytes = input.readNBytes(circIdLen)
+            if (circBytes.size < circIdLen) throw EOFException("truncated circ_id")
+            val cmdByte = input.read()
+            if (cmdByte < 0) throw EOFException("truncated command")
+            val circId = if (circIdLen == 2) readU16be(circBytes, 0).toLong() else readU32be(circBytes, 0)
+            val command = CellCommand.fromIdOrNull(cmdByte)
+            if (command == null) {
+                drainUnknownPayload(input, cmdByte)
+                continue
+            }
+            val payload = if (command.variable) {
+                readVariablePayload(input)
+            } else {
+                val body = input.readNBytes(Cell.FIXED_PAYLOAD_LEN)
+                if (body.size < Cell.FIXED_PAYLOAD_LEN) throw EOFException("truncated fixed payload")
+                body
+            }
+            return Cell(circId, command, payload)
+        }
+    }
+
+    private fun readVariablePayload(input: InputStream): ByteArray {
+        val lenBytes = input.readNBytes(2)
+        if (lenBytes.size < 2) throw EOFException("truncated length")
+        val len = readU16be(lenBytes, 0)
+        if (len > Cell.MAX_VAR_CELL_PAYLOAD) {
+            throw java.io.IOException(
+                "variable cell payload length $len exceeds max ${Cell.MAX_VAR_CELL_PAYLOAD}",
+            )
+        }
+        val body = input.readNBytes(len)
+        if (body.size < len) throw EOFException("truncated variable payload")
+        return body
+    }
+
+    /** Spec: command ≥ 128 ⇒ variable; else fixed 509. */
+    private fun drainUnknownPayload(input: InputStream, cmdByte: Int) {
+        if (cmdByte >= 128) {
             val lenBytes = input.readNBytes(2)
-            if (lenBytes.size < 2) throw EOFException("truncated length")
+            if (lenBytes.size < 2) throw EOFException("truncated unknown-var length")
             val len = readU16be(lenBytes, 0)
+            if (len > Cell.MAX_VAR_CELL_PAYLOAD) {
+                throw java.io.IOException(
+                    "unknown variable cell cmd=$cmdByte length $len exceeds max",
+                )
+            }
             val body = input.readNBytes(len)
-            if (body.size < len) throw EOFException("truncated variable payload")
-            body
+            if (body.size < len) throw EOFException("truncated unknown-var payload")
         } else {
             val body = input.readNBytes(Cell.FIXED_PAYLOAD_LEN)
-            if (body.size < Cell.FIXED_PAYLOAD_LEN) throw EOFException("truncated fixed payload")
-            body
+            if (body.size < Cell.FIXED_PAYLOAD_LEN) throw EOFException("truncated unknown-fixed payload")
         }
-        return Cell(circId, command, payload)
     }
 }
 

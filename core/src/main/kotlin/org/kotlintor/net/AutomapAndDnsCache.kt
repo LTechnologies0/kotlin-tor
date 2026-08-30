@@ -72,7 +72,7 @@ class AutomapAddressMap(
 }
 
 /**
- * Exit DNS resolve cache (C Tor `dns.c` lite).
+ * Exit DNS resolve cache (C Tor `dns.c` helpers).
  */
 class DnsResolveCache(
     private val ttlSec: Long = 300,

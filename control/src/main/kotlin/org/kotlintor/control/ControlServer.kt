@@ -23,11 +23,13 @@ import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.io.PushbackInputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import org.kotlintor.link.Control0Peek
 
 /**
  * Subset of control-spec: PROTOCOLINFO, AUTHCHALLENGE/SAFECOOKIE, AUTHENTICATE,
@@ -110,8 +112,17 @@ private class ControlSession(
         ).also { it.markOpen() }
 
     suspend fun run() = withContext(Dispatchers.IO) {
-        val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
+        val rawIn = PushbackInputStream(socket.getInputStream(), 4)
+        val peek = ByteArray(4)
+        val n = rawIn.read(peek)
+        if (n > 0) rawIn.unread(peek, 0, n)
         val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))
+        if (n >= 4 && Control0Peek.hasControl0Command(peek)) {
+            writer.write(Control0Peek.rejectReplyLine())
+            writer.flush()
+            return@withContext
+        }
+        val reader = BufferedReader(InputStreamReader(rawIn, StandardCharsets.UTF_8))
         val eventJob = launch {
             daemon.events.collect { ev ->
                 if (!authenticated) return@collect

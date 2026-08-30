@@ -33,7 +33,8 @@ class CircuitListStatusBwArrayElevationTest {
     fun `status heartbeat counters`() {
         HeartbeatStatus.resetClock(1_000)
         val line = HeartbeatStatus.format(10, 20, true, circuitsOpen = 2, orConns = 1, nowMs = 6_000)
-        assertTrue(line.contains("uptime=5s"))
+        assertTrue(line.contains("uptime=0:00 hours"), line)
+        assertTrue(line.contains("circuits=2"), line)
         assertEquals(1, HeartbeatStatus.heartbeatCount())
         assertEquals(0, HeartbeatStatus.lastHeartbeatAgeMs(6_000))
     }

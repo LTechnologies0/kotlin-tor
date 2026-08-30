@@ -63,6 +63,11 @@ class AddressSet(
         runCatching { InetAddress.getByName(host) }.getOrNull()?.let { add(it) }
     }
 
+    /** Clear all bits (tests / DoS reset; C Tor recreates the set). */
+    fun clear() {
+        for (i in 0 until bits.length()) bits.set(i, 0L)
+    }
+
     private fun index(addr: InetAddress, salt: Int): Int {
         val raw = addr.address
         var h = salt * -0x61C88647
@@ -73,6 +78,10 @@ class AddressSet(
     }
 
     companion object {
+        /** C Tor `address_set_new`. */
+        fun new(maxAddressesGuess: Int = 1024, hashCount: Int = 4): AddressSet =
+            AddressSet(maxAddressesGuess, hashCount)
+
         fun of(vararg hosts: String): AddressSet {
             val set = AddressSet(hosts.size.coerceAtLeast(8) * 4)
             hosts.forEach { set.add(it) }

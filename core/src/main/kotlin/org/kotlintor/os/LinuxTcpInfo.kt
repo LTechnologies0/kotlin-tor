@@ -7,10 +7,16 @@ import java.net.Socket
 /**
  * Linux `TCP_INFO` + `SIOCOUTQNSD` probe for KIST (C Tor `scheduler_kist.c`).
  *
+ * The python3 `ProcessBuilder` path below is **debug / opt-in only** and must **not**
+ * run on the OR write hot path by default. Set env `KOTLIN_TOR_KIST_PYTHON=1` to enable
+ * full KIST probes; otherwise callers use [KistMath.liteLimit] / KIST_LITE.
+ *
  * Uses python3 ctypes (same pattern as [org.kotlintor.proxy.LinuxOriginalDst]) so
  * we avoid JNI; returns null → callers fall back to [KistMath.liteLimit].
  */
 object LinuxTcpInfo {
+    private const val ENV_FULL_KIST = "KOTLIN_TOR_KIST_PYTHON"
+
     data class Info(
         val sndCwnd: Long,
         val unacked: Long,
@@ -21,6 +27,19 @@ object LinuxTcpInfo {
             KistMath.SocketInfo(cwnd = sndCwnd, unacked = unacked, mss = sndMss, notSent = notSent)
     }
 
+    /**
+     * True only when full-KIST python probing is explicitly enabled **and** a python3
+     * interpreter exists. Presence of `/usr/bin/python3` alone is not sufficient.
+     */
+    fun isFullKistEnabled(): Boolean {
+        val flag = System.getenv(ENV_FULL_KIST)?.trim()?.lowercase()
+        if (flag != "1" && flag != "true" && flag != "yes") return false
+        return File("/usr/bin/python3").canExecute() || File("/bin/python3").canExecute()
+    }
+
+    /** Alias for [isFullKistEnabled] — python3 alone does not mean TCP_INFO is available. */
+    fun isAvailable(): Boolean = isFullKistEnabled()
+
     fun query(socket: Socket): Info? {
         val fd = fileDescriptor(socket) ?: return null
         return queryFd(fd)
@@ -28,7 +47,7 @@ object LinuxTcpInfo {
 
     fun queryFd(fd: Int): Info? {
         if (fd < 0) return null
-        if (!File("/usr/bin/python3").canExecute() && !File("/bin/python3").canExecute()) return null
+        if (!isFullKistEnabled()) return null
         // Layout is arch-dependent; read named fields via ctypes Structure on Linux.
         val py = """
 import ctypes, ctypes.util, sys

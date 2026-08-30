@@ -7,13 +7,7 @@ import org.kotlintor.util.u16be
 import org.kotlintor.util.u32be
 
 /**
- * Trunnel-shaped link handshake / netinfo / subproto codecs (C Tor trunnel lite).
- *
- * Inventory:
- * - L1:trunnel/link_handshake.c
- * - L1:trunnel/netinfo.c
- * - L1:trunnel/subproto_request.c
- * - L1:trunnel/pwbox.c (password-box placeholder)
+ * Shared trunnel helper codecs used by naming primaries in this package.
  */
 object LinkHandshakeTrunnel {
     fun versionsPayload(versions: List<Int>): ByteArray =

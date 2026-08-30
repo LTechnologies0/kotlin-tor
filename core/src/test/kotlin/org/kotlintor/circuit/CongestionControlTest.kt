@@ -21,8 +21,8 @@ class CongestionControlTest {
         val cc = CongestionControl(sendmeInc = 10, cwnd = 20, cwndMin = 10)
         repeat(20) { cc.beforeOutboundData() }
         assertEquals(20, cc.inFlight)
-        // Acquiring one more would block — credit via SENDME first.
-        cc.onInboundSendme()
+        // Acquiring one more would block — credit via SENDME first (v0 empty = no digest).
+        assertTrue(cc.onInboundSendme(ByteArray(0), Sendme.DigestQueue()))
         assertTrue(cc.inFlight <= 20)
         assertTrue(cc.congestionWindow >= 10)
         cc.beforeOutboundData()

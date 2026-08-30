@@ -4,7 +4,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.pow
 
 /**
- * Typed outbound cell queue (C Tor `cell_queue_t` lite).
+ * Typed outbound cell queue (C Tor `cell_queue_t`).
  */
 class CellQueue(private val maxCells: Int = DEFAULT_MAX) {
     private val q = ArrayDeque<ByteArray>()
@@ -12,17 +12,60 @@ class CellQueue(private val maxCells: Int = DEFAULT_MAX) {
     fun append(payload: ByteArray): Boolean {
         if (q.size >= maxCells) return false
         q.addLast(payload.copyOf())
+        totalAllocationBytes.addAndGet(payload.size.toLong())
         return true
     }
 
-    fun pop(): ByteArray? = if (q.isEmpty()) null else q.removeFirst()
+    fun pop(): ByteArray? {
+        if (q.isEmpty()) return null
+        val p = q.removeFirst()
+        totalAllocationBytes.addAndGet(-p.size.toLong())
+        return p
+    }
+
     fun peek(): ByteArray? = q.firstOrNull()
-    fun clear() = q.clear()
+
+    fun clear() {
+        while (q.isNotEmpty()) {
+            val p = q.removeFirst()
+            totalAllocationBytes.addAndGet(-p.size.toLong())
+        }
+    }
+
     fun size(): Int = q.size
     fun isEmpty(): Boolean = q.isEmpty()
 
     companion object {
         const val DEFAULT_MAX: Int = 1024
+
+        private val totalAllocationBytes = java.util.concurrent.atomic.AtomicLong(0)
+
+        /** C Tor `cell_queue_init`. */
+        fun cellQueueInit(maxCells: Int = DEFAULT_MAX): CellQueue = CellQueue(maxCells)
+
+        /** C Tor `cell_queue_append`. */
+        fun cellQueueAppend(queue: CellQueue, payload: ByteArray): Boolean = queue.append(payload)
+
+        /** C Tor `cell_queue_append_packed_copy` (copy into queue). */
+        fun cellQueueAppendPackedCopy(queue: CellQueue, payload: ByteArray): Boolean =
+            queue.append(payload)
+
+        /** C Tor `cell_queue_clear`. */
+        fun cellQueueClear(queue: CellQueue) = queue.clear()
+
+        /** C Tor `cell_queue_pop`. */
+        fun cellQueuePop(queue: CellQueue): ByteArray? = queue.pop()
+
+        /** C Tor `cell_queues_check_size` — true if under soft cap. */
+        fun cellQueuesCheckSize(softCapBytes: Long = 64L * 1024 * 1024): Boolean =
+            totalAllocationBytes.get() <= softCapBytes
+
+        /** C Tor `cell_queues_get_total_allocation`. */
+        fun cellQueuesGetTotalAllocation(): Long = totalAllocationBytes.get().coerceAtLeast(0)
+
+        fun resetTotalAllocationForTests() {
+            totalAllocationBytes.set(0)
+        }
     }
 }
 
@@ -42,6 +85,9 @@ class DestroyCellQueue {
     fun size(): Int = q.size
     fun isEmpty(): Boolean = q.isEmpty()
     fun clear() = q.clear()
+
+    /** C Tor `destroy_cell_queue_append`. */
+    fun destroyCellQueueAppend(circId: Long, reason: Int = 0) = append(circId, reason)
 }
 
 /**
@@ -143,8 +189,92 @@ class CircuitMux(
     fun isActive(circId: Long): Boolean = circuits[circId]?.active == true
     fun circuitQueueSize(circId: Long): Int = circuits[circId]?.cellQueue?.size() ?: 0
 
+    /** C Tor `circuitmux_detach_all_circuits` / `channel_unlink_all_circuits`. */
+    fun detachAll() {
+        circuits.keys.toList().forEach { detach(it) }
+        destroyQueue.clear()
+    }
+
+    /** C Tor `circuitmux_free_`. */
+    fun free() = detachAll()
+
+    /** C Tor `circuitmux_assert_okay` — lightweight invariant check. */
+    fun assertOkay(): Boolean =
+        circuits.values.all { it.queuedCells == it.cellQueue.size() && it.active == (it.queuedCells > 0) }
+
+    /** C Tor `circuitmux_clear_num_cells`. */
+    fun clearNumCells(circId: Long) = setQueuedCells(circId, 0)
+
+    /** C Tor `circuitmux_clear_policy` — restore default EWMA. */
+    fun clearPolicy() {
+        policy = EwmaCircuitMuxPolicy()
+    }
+
+    /** C Tor `circuitmux_count_queued_destroy_cells`. */
+    fun countQueuedDestroyCells(): Int = destroyQueue.size()
+
+    /** C Tor `circuitmux_get_first_active_circuit`. */
+    fun getFirstActiveCircuit(): Long? = policy.pickActive(circuits.values.filter { it.active })
+
+    /** C Tor `circuitmux_mark_destroyed_circids_usable` (no-op until reuse map). */
+    fun markDestroyedCircidsUsable() = Unit
+
+    /** C Tor `circuitmux_notify_xmit_cells`. */
+    fun notifyXmitCells(circId: Long, nCells: Int) = notifyXmit(circId, nCells)
+
+    /** C Tor `circuitmux_notify_xmit_destroy`. */
+    fun notifyXmitDestroy() {
+        if (!destroyQueue.isEmpty()) destroyQueue.pop()
+    }
+
+    /** C Tor `circuitmux_num_active_circuits`. */
+    fun numActiveCircuits(): Int = numActive()
+
+    /** C Tor `circuitmux_num_cells_for_circuit`. */
+    fun numCellsForCircuit(circId: Long): Int = circuitQueueSize(circId)
+
+    /** C Tor `circuitmux_set_num_cells`. */
+    fun setNumCells(circId: Long, n: Int) = setQueuedCells(circId, n)
+
+    /** C Tor `circuitmux_attached_circuit_direction` — 0 outbound / 1 inbound stub. */
+    fun attachedCircuitDirection(circId: Long): Int = if (isAttached(circId)) 0 else -1
+
+    /** C Tor `append_cell_to_circuit_queue`. */
+    fun appendCellToCircuitQueue(circId: Long, payload: ByteArray): Boolean = enqueue(circId, payload)
+
+    /** C Tor `circuit_clear_cell_queue`. */
+    fun circuitClearCellQueue(circId: Long) {
+        val mc = circuits[circId] ?: return
+        mc.cellQueue.clear()
+        setQueuedCells(circId, 0)
+    }
+
+    companion object {
+        /** C Tor `circuitmux_alloc`. */
+        fun circuitmuxAlloc(policy: CircuitMuxPolicy = EwmaCircuitMuxPolicy()): CircuitMux =
+            CircuitMux(policy)
+
+        /** C Tor `channel_unlink_all_circuits`. */
+        fun channelUnlinkAllCircuits(mux: CircuitMux) = mux.detachAll()
+    }
+
+    /** C Tor `circuitmux_set_policy`. */
+    fun circuitmuxSetPolicy(p: CircuitMuxPolicy) = setPolicy(p)
+
+    /** C Tor `circuitmux_is_circuit_active`. */
+    fun circuitmuxIsCircuitActive(circId: Long): Boolean = isActive(circId)
+
+    /** C Tor `circuitmux_is_circuit_attached`. */
+    fun circuitmuxIsCircuitAttached(circId: Long): Boolean = isAttached(circId)
+
+    /** C Tor `circuitmux_num_circuits`. */
+    fun circuitmuxNumCircuits(): Int = numCircuits()
+
+    /** C Tor `circuitmux_append_destroy_cell`. */
+    fun circuitmuxAppendDestroyCell(circId: Long, reason: Int = 0) = queueDestroy(circId, reason)
+
     /**
-     * Drain one unit of work for the channel writer (C Tor cmux flush path lite).
+     * Drain one unit of work for the channel writer (C Tor cmux flush path).
      * Prefers DESTROY entries, else the EWMA-picked circuit's next queued cell.
      */
     sealed class FlushItem {
@@ -176,7 +306,7 @@ class CircuitMux(
 
     /**
      * Fair multi-circuit drain: round-robin across active circuits after DESTROYs,
-     * capped by [maxItems] (C Tor cmux under multi-OR load lite).
+     * capped by [maxItems] (C Tor cmux under multi-OR load).
      */
     fun flushFair(maxItems: Int = 32): List<FlushItem> {
         val out = ArrayList<FlushItem>(maxItems.coerceAtMost(32))

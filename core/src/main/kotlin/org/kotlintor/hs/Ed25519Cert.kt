@@ -8,6 +8,11 @@ import org.kotlintor.util.u32be
 import java.util.Base64
 
 /** prop220 Ed25519 certificates (cert-spec). */
+/**
+ * Ed25519 certificate trunnel (C Tor `ed25519_cert.c`).
+ *
+ * Inventory: `L1:trunnel/ed25519_cert.c`
+ */
 object Ed25519Cert {
     const val TYPE_IDENTITY_V_SIGNING: Int = 0x04
     const val TYPE_SIGNING_V_TLS_CERT: Int = 0x05

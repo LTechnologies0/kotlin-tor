@@ -26,5 +26,5 @@ include(
 // Optional apps/tests — omit by default so OnionVPN includeBuild does not configure
 // AGP application modules (kotlin extension clashes under composite builds).
 if (providers.gradleProperty("kotlin.tor.extras").orNull == "true") {
-    include(":demo-router", ":integration-tests")
+    include(":demo-common", ":demo-android", ":demo-desktop", ":integration-tests")
 }

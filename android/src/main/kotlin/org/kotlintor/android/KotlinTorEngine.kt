@@ -3,10 +3,12 @@ package org.kotlintor.android
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.kotlintor.TorDaemon
 import org.kotlintor.config.IsolationFlag
 import org.kotlintor.config.ListenSpec
@@ -17,6 +19,7 @@ import org.kotlintor.proxy.HttpConnectProxy
 import org.kotlintor.proxy.Socks5Server
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Android embed API for OnionVPN / apps. Exposes localhost SOCKS + Control + HTTP CONNECT.
@@ -30,6 +33,8 @@ class KotlinTorEngine(
     private val context: Context,
     private val config: TorConfig = routerDefaultConfig(context),
 ) {
+    private enum class Lifecycle { IDLE, STARTING, RUNNING, STOPPING }
+
     private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var daemon = TorDaemon(config, scope)
     private var socks: Socks5Server? = null
@@ -37,7 +42,8 @@ class KotlinTorEngine(
     private var httpConnect: HttpConnectProxy? = null
     private var control: ControlServer? = null
     private var dnsPort: DnsPortServer? = null
-    private val running = AtomicBoolean(false)
+    private val lifecycle = AtomicReference(Lifecycle.IDLE)
+    private var startJob: Job? = null
     private val bootstrapped = AtomicBoolean(false)
 
     /** Optional callback to protect a file descriptor from VPN routing. */
@@ -50,6 +56,10 @@ class KotlinTorEngine(
             if (value != null) {
                 socketProtector = { fd -> value.protect(fd) }
                 org.kotlintor.os.PlatformNatives.socketProtector = socketProtector
+                // Prefer Socket-based protect on Android (reliable vs FD reflection).
+                org.kotlintor.os.PlatformNatives.socketProtectorSocket = { sock ->
+                    value.protectSocket(sock)
+                }
             }
         }
 
@@ -59,7 +69,7 @@ class KotlinTorEngine(
     val dnsPortBound: Int get() = dnsPort?.boundPort() ?: -1
     val httpConnectPort: Int get() = httpConnect?.boundPort() ?: -1
     val controlPort: Int get() = control?.boundPort() ?: -1
-    val isRunning: Boolean get() = running.get()
+    val isRunning: Boolean get() = lifecycle.get() == Lifecycle.RUNNING
     val bootstrapLine: String
         get() = if (bootstrapped.get()) {
             daemon.client.bootstrapTracker.statusLine
@@ -86,6 +96,10 @@ class KotlinTorEngine(
     /**
      * Bind allocated loopback ports for OnionVPN HEV_SOCKS + DNSCrypt plane.
      * DNSCrypt must start only after this reports ready (SOCKS + DNSPort up).
+     *
+     * [onReady] / engine `bootstrapped` fire only when the client reports
+     * [org.kotlintor.TorClient.isBootstrapped] (bootstrap [org.kotlintor.BootstrapPhase.DONE]).
+     * DisableNetwork starts listeners but does not claim circuit-ready.
      */
     fun startWithPorts(
         socks: ListenSpec,
@@ -97,9 +111,9 @@ class KotlinTorEngine(
         onReady: (() -> Unit)? = null,
         onError: ((Throwable) -> Unit)? = null,
     ) {
-        if (!running.compareAndSet(false, true)) return
+        if (!lifecycle.compareAndSet(Lifecycle.IDLE, Lifecycle.STARTING)) return
         ensureScope()
-        scope.launch {
+        startJob = scope.launch {
             try {
                 requireSafeListener("SocksPort", socks)
                 dnsCryptSocks?.let { requireSafeListener("SocksPort(dnsCrypt)", it) }
@@ -111,7 +125,6 @@ class KotlinTorEngine(
 
                 // Protector must already be attached when under VPN.
                 daemon.start()
-                bootstrapped.set(true)
                 val s = Socks5Server(daemon.client, daemon.scope, optimisticData = config.optimisticData)
                 s.start(socks)
                 this@KotlinTorEngine.socks = s
@@ -136,17 +149,30 @@ class KotlinTorEngine(
                 val c = ControlServer(daemon, daemon.scope)
                 c.start(controlListen)
                 control = c
-                onReady?.invoke()
-                runCatching {
-                    OrbotCompat.broadcastStatus(
-                        context,
-                        this@KotlinTorEngine,
-                        OrbotCompat.STATUS_ON,
-                    )
+
+                if (!lifecycle.compareAndSet(Lifecycle.STARTING, Lifecycle.RUNNING)) {
+                    // stop() claimed ownership during start — tear down and exit.
+                    teardownPartialStart()
+                    bootstrapped.set(false)
+                    return@launch
+                }
+
+                // Only claim circuit-ready / onReady after DONE (not DisableNetwork-only start).
+                val circuitReady = daemon.client.isBootstrapped
+                bootstrapped.set(circuitReady)
+                if (circuitReady) {
+                    onReady?.invoke()
+                    runCatching {
+                        OrbotCompat.broadcastStatus(
+                            context,
+                            this@KotlinTorEngine,
+                            OrbotCompat.STATUS_ON,
+                        )
+                    }
                 }
             } catch (t: Throwable) {
                 teardownPartialStart()
-                running.set(false)
+                lifecycle.set(Lifecycle.IDLE)
                 bootstrapped.set(false)
                 runCatching {
                     context.sendBroadcast(OrbotCompat.errorIntent(context, t.message ?: "start failed"))
@@ -157,11 +183,35 @@ class KotlinTorEngine(
     }
 
     fun stop() {
-        if (!running.get() && socks == null && control == null) return
+        while (true) {
+            val cur = lifecycle.get()
+            when (cur) {
+                Lifecycle.IDLE -> {
+                    if (socks == null && control == null) return
+                    if (!lifecycle.compareAndSet(Lifecycle.IDLE, Lifecycle.STOPPING)) continue
+                }
+                Lifecycle.STOPPING -> return
+                Lifecycle.STARTING, Lifecycle.RUNNING -> {
+                    if (!lifecycle.compareAndSet(cur, Lifecycle.STOPPING)) continue
+                }
+            }
+            break
+        }
+        val job = startJob
+        job?.cancel()
+        runCatching {
+            runBlocking(Dispatchers.IO) { job?.join() }
+        }
+        startJob = null
         teardownPartialStart()
+        vpnTunnel?.teardownTun()
+        vpnTunnel = null
+        socketProtector = null
+        org.kotlintor.os.PlatformNatives.socketProtector = null
+        org.kotlintor.os.PlatformNatives.socketProtectorSocket = null
         scope.cancel()
-        running.set(false)
         bootstrapped.set(false)
+        lifecycle.set(Lifecycle.IDLE)
     }
 
     fun newnym() {
@@ -174,6 +224,25 @@ class KotlinTorEngine(
 
     /** Tor client for TUN / advanced callers (after [start]). */
     fun daemonClient(): org.kotlintor.TorClient = daemon.client
+
+    /** Daemon for events / onion / control demos (after [start]). */
+    fun torDaemon(): TorDaemon = daemon
+
+    fun circuitStatusLines(): List<String> =
+        if (bootstrapped.get()) daemon.client.circuitStatusLines() else emptyList()
+
+    fun guardStatusLines(): List<String> =
+        if (bootstrapped.get()) daemon.client.sampledGuardStatusLines() else emptyList()
+
+    fun setDormant(value: Boolean) {
+        if (!bootstrapped.get()) return
+        daemon.client.setDormant(value)
+    }
+
+    fun bootstrapProgressLine(): String = bootstrapLine
+
+    val dnssecValidate: Boolean
+        get() = config.dnssecMode == org.kotlintor.net.dns.DnssecMode.VALIDATE
 
     private fun ensureScope() {
         if (!scope.isActive) {
@@ -230,6 +299,9 @@ class KotlinTorEngine(
                 isolationFlags = setOf(IsolationFlag.IsolateSOCKSAuth),
                 safeSocks = true,
                 safeSocksAllowIpLiterals = true,
+                // Android has no reliable TCP_INFO/KIST path; Vanilla avoids
+                // CREATE2 write-budget deadlocks from empty SocketInfo.
+                schedulers = listOf(org.kotlintor.link.SchedulerType.VANILLA),
             )
 
         /** @deprecated Use [routerDefaultConfig]; kept for OnionVPN call sites. */

@@ -19,8 +19,12 @@ object KistMath {
      * @return byte write limit for this tick; 0 means do not write more.
      */
     fun computeLimit(info: SocketInfo, sockBufSizeFactor: Double = 1.0): Long {
-        if (info.cwnd == 0L && info.mss == 0L) {
-            // Fallback: unlimited (Vanilla behavior).
+        // Missing/invalid TCP_INFO (cwnd==0): do not treat default mss as a closed window.
+        // Android and non-Linux hosts often lack TCP_INFO; returning 0 deadlocks CREATE2.
+        if (info.cwnd == 0L) {
+            return Long.MAX_VALUE
+        }
+        if (info.mss == 0L) {
             return Long.MAX_VALUE
         }
         val tcpSpace = if (info.cwnd >= info.unacked) {

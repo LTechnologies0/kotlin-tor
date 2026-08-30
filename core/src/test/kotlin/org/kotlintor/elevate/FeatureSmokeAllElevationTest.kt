@@ -97,7 +97,7 @@ class FeatureSmokeAllElevationTest {
         val parsed = HaproxyProxyHeader.parseProxyHeaderLine(proxy)!!
         assertEquals("TCP4", parsed.family)
         assertEquals(443, parsed.dstPort)
-        assertTrue(Control0Peek.hasControl0Command(byteArrayOf(5, 0, 0)))
+        assertTrue(Control0Peek.hasControl0Command(byteArrayOf(0, 0, 0, 5)))
         assertFalse(Control0Peek.hasControl0Command("GETINFO".toByteArray()))
 
         // --- Dirauth / dirclient ---
@@ -149,6 +149,7 @@ class FeatureSmokeAllElevationTest {
         assertEquals("SmokeRelay", RelayConfigView.fromTorConfig(relayCfg).nickname)
         assertEquals("203.0.113.50", RelayFindAddr.addressToPublish(relayCfg))
         assertTrue(RelaySys.shouldRunRelay(relayCfg))
+        RouterMode.setServerAdvertised(true)
         assertTrue(RelaySys.shouldPublishDescriptor(relayCfg))
         assertEquals(18 * 3600L, RelayPeriodic.descriptorRepublishIntervalSec(relayCfg))
         RelayMetrics.reset()
@@ -179,7 +180,7 @@ class FeatureSmokeAllElevationTest {
         assertEquals(1, CircuitList.countOrigins())
         HeartbeatStatus.resetClock(0)
         val hb = HeartbeatStatus.format(1, 2, true, 1, 1, nowMs = 5_000)
-        assertTrue(hb.contains("uptime=5s"))
+        assertTrue(hb.contains("uptime=0:00 hours"), hb)
         assertEquals(1, HeartbeatStatus.heartbeatCount())
         assertEquals(5, BwHist.Slot(5, 0, 0, 0).toBwArray().read)
 

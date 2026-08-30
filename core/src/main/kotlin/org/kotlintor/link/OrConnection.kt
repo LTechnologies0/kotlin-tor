@@ -56,6 +56,10 @@ class OrConnection(
     private val bindLocalHost: String? = null,
     /** ConstrainedSockets buffer size (bytes); null disables. */
     private val constrainedSockSize: Int? = null,
+    /** Optional TCPProxy (host) for HAProxy PROXY inject before TLS. */
+    private val tcpProxyHost: String? = null,
+    private val tcpProxyPort: Int? = null,
+    private val tcpProxyProtocol: String = "haproxy",
 ) {
     private var socket: SSLSocket? = null
     private var input: BufferedInputStream? = null
@@ -156,6 +160,9 @@ class OrConnection(
                 bindLocalHost,
                 timeoutMs = 15_000,
                 constrainedSockSize = constrainedSockSize,
+                tcpProxyHost = tcpProxyHost,
+                tcpProxyPort = tcpProxyPort,
+                tcpProxyProtocol = tcpProxyProtocol,
             ).also {
                 it.soTimeout = 20_000
             }
@@ -181,7 +188,10 @@ class OrConnection(
         performHandshake()
         if (expectedIdentityHex != null) {
             val peer = peerIdentityFingerprintHex
-            if (peer != null && !peer.equals(expectedIdentityHex, ignoreCase = true)) {
+                ?: throw IllegalStateException(
+                    "OR identity missing: expected $expectedIdentityHex but CERTS yielded no fingerprint at $host:$port",
+                )
+            if (!peer.equals(expectedIdentityHex, ignoreCase = true)) {
                 throw IllegalStateException(
                     "OR identity mismatch: expected $expectedIdentityHex got $peer at $host:$port",
                 )
@@ -203,7 +213,7 @@ class OrConnection(
                 }
             }
         }
-        // Periodic cmux flush under KIST / KIST_LITE (scheduler_kist tick lite).
+        // Periodic cmux flush under KIST / KIST_LITE (scheduler_kist tick).
         if (writeBudget.type == SchedulerType.KIST || writeBudget.type == SchedulerType.KIST_LITE) {
             flushJob = scope.launch(Dispatchers.IO) {
                 while (isActive && isOpen) {
@@ -221,10 +231,11 @@ class OrConnection(
         val versionsPayload = ourVersions.fold(ByteArray(0)) { acc, v -> acc + u16be(v) }
         send(Cell(0, CellCommand.VERSIONS, versionsPayload), circIdLen = 2)
         var sawVersions = false
+        var sawCerts = false
         var sawNetinfo = false
         val responderCells = ArrayList<ByteArray>()
         val deadline = System.currentTimeMillis() + 30_000
-        while (System.currentTimeMillis() < deadline && (!sawVersions || !sawNetinfo)) {
+        while (System.currentTimeMillis() < deadline && (!sawVersions || !sawCerts || !sawNetinfo)) {
             val cell = withContext(Dispatchers.IO) { CellCodec.read(input!!, circIdLen) }
             when (cell.command) {
                 CellCommand.VERSIONS -> {
@@ -246,6 +257,7 @@ class OrConnection(
                     val parsed = CertsCell.parse(cell.payload)
                     peerIdentityFingerprint = parsed.rsaIdentityFingerprint
                     peerEd25519Identity = parsed.ed25519Identity
+                    sawCerts = true
                 }
                 CellCommand.AUTH_CHALLENGE -> {
                     responderCells += CellCodec.encode(cell, circIdLen)
@@ -278,8 +290,8 @@ class OrConnection(
                 else -> controlCells.trySend(cell)
             }
         }
-        check(sawVersions && sawNetinfo) {
-            "OR handshake incomplete (v=$sawVersions netinfo=$sawNetinfo negotiated=$negotiatedVersion)"
+        check(sawVersions && sawCerts && sawNetinfo) {
+            "OR handshake incomplete (v=$sawVersions certs=$sawCerts netinfo=$sawNetinfo negotiated=$negotiatedVersion)"
         }
         if (negotiatedVersion >= 5) {
             runCatching {
@@ -402,11 +414,10 @@ class OrConnection(
         } else {
             null
         }
-        return when {
-            base != null -> base.copy(outbufLen = orChannel.outbufBytes)
-            orChannel.outbufBytes > 0 -> KistMath.SocketInfo(outbufLen = orChannel.outbufBytes)
-            else -> null
-        }
+        // Only return SocketInfo when TCP_INFO succeeded. A synthetic
+        // SocketInfo(cwnd=0, mss=1460, outbufLen=N) made computeLimit return 0
+        // and stalled CREATE2 forever on Android (no python3/TCP_INFO).
+        return base?.copy(outbufLen = orChannel.outbufBytes)
     }
 
     private suspend fun writeEncodedDirect(

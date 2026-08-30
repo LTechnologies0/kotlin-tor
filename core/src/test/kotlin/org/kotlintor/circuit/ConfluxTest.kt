@@ -8,22 +8,22 @@ class ConfluxTest {
     @Test
     fun `link payload roundtrip`() {
         val nonce = Conflux.newNonce()
-        val p = Conflux.LinkPayload(
+        val p = ConfluxCell.Link(
             nonce = nonce,
             lastSeqnoSent = 7,
             lastSeqnoRecv = 3,
-            desiredUx = Conflux.DesiredUx.HIGH_THROUGHPUT,
+            desiredUx = ConfluxCell.DesiredUx.HIGH_THROUGHPUT,
         )
         val parsed = Conflux.parseLink(p.encode())
         assertArrayEquals(nonce, parsed.nonce)
         assertEquals(7, parsed.lastSeqnoSent)
         assertEquals(3, parsed.lastSeqnoRecv)
-        assertEquals(Conflux.DesiredUx.HIGH_THROUGHPUT, parsed.desiredUx)
+        assertEquals(ConfluxCell.DesiredUx.HIGH_THROUGHPUT, parsed.desiredUx)
     }
 
     @Test
     fun `switch payload`() {
         val s = Conflux.parseSwitch(Conflux.switchCell(99))
-        assertEquals(99, s.sequnce)
+        assertEquals(99, s.sequence)
     }
 }

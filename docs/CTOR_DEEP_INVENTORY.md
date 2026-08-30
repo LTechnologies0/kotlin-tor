@@ -8,10 +8,10 @@ This file keeps **hand notes** on a few subsystems. Depth grades and complete `.
 
 ## Scanner snapshot (honesty)
 
-- **D0=0 · D1≈76 · majority D2 (~2046) · D3≈11 · N/A≈203**
+- **L1: D3≈213 · D2=0 · N/A≈166**; global **D2≈1916 · D3≈217 · N/A≈203**
 - Full `or_options_t` field-by-field wiring (Layer 4) still incomplete
 - Dirauth live multi-authority + keypin journal depth still thin
-- Full KIST (`scheduler_kist.c`) and full WTF-PAD machines — **not ported**
+- Full KIST / WTF-PAD / Equi-X depth still thinner than C Tor
 - Native Tor UDP cells (spec gap)
 - `lib/*` → N/A (Kotlin/JDK) by policy
 

@@ -79,4 +79,33 @@ object Ntor {
             kh = keys.copyOfRange(72, 92),
         )
     }
+
+    // --- C Tor `onion_ntor.h` op aliases (L3) ---
+
+    /** C Tor `onion_skin_ntor_create`. */
+    fun onionSkinNtorCreate(identity: ByteArray, onionKey: ByteArray): ClientState =
+        clientHandshake(identity, onionKey)
+
+    /** C Tor `onion_skin_ntor_client_handshake`. */
+    fun onionSkinNtorClientHandshake(
+        state: ClientState,
+        identity: ByteArray,
+        onionKey: ByteArray,
+        serverHandshake: ByteArray,
+    ): Result = clientFinish(state, identity, onionKey, serverHandshake)
+
+    /** C Tor `onion_skin_ntor_server_handshake`. */
+    fun onionSkinNtorServerHandshake(
+        identity: ByteArray,
+        onionPrivate: ByteArray,
+        onionPublic: ByteArray,
+        clientHandshake: ByteArray,
+    ): NtorServer.Reply = NtorServer.respond(identity, onionPrivate, onionPublic, clientHandshake)
+
+    /** C Tor `ntor_handshake_state_free_`. */
+    fun ntorHandshakeStateFree(state: ClientState) {
+        state.secretKey.secureWipe()
+        state.publicKey.fill(0)
+        state.handshake.fill(0)
+    }
 }

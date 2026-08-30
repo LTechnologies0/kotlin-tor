@@ -31,6 +31,12 @@ class CircpadHistogram(
 
     fun binsEmpty(): Boolean = remainingTokens() == 0
 
+    /** Left edge of [bin] in microseconds (C Tor `circpad_histogram_bin_to_usec`). */
+    fun binToUsec(bin: Int): Long {
+        val i = bin.coerceIn(0, edgesUs.lastIndex)
+        return edgesUs[i]
+    }
+
     fun refill() {
         initial.copyInto(tokens)
     }
