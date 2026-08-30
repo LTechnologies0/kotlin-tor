@@ -16,3 +16,4 @@ capture/
 **/__pycache__/
 *.pyc
 demo-android/leak-evidence/
+demo-desktop/data-desktop/
