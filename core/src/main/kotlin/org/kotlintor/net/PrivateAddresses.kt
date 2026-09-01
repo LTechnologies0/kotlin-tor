@@ -33,6 +33,7 @@ object PrivateAddresses {
                 // fc00::/7 unique local, fe80::/10 link-local already covered
                 (b[0].toInt() and 0xfe) == 0xfc
             }
+            else -> false
         }
     }
 
