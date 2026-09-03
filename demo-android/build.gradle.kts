@@ -43,6 +43,18 @@ android {
     lint {
         checkReleaseBuilds = false
     }
+
+    packaging {
+        resources {
+            // BouncyCastle (bcprov/bcpkix/bcutil) each ship META-INF/LICENSE.md + NOTICE.md.
+            excludes += setOf(
+                "META-INF/LICENSE.md",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE.md",
+                "META-INF/NOTICE.txt",
+            )
+        }
+    }
 }
 
 dependencies {
