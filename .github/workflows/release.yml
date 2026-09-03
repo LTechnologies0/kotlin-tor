@@ -45,12 +45,14 @@ jobs:
       - uses: ./.github/actions/setup-kotlin-tor
         with:
           extras: "true"
-      - name: Package Linux AppImage + portable tree
-        run: >
-          ./gradlew
-          :demo-desktop:createDistributable
-          :demo-desktop:packageAppImage
-          --no-daemon
+      - name: Package Linux portable app
+        run: ./gradlew :demo-desktop:createDistributable --no-daemon
+      - name: Install Linux .deb packaging tools
+        continue-on-error: true
+        run: sudo apt-get update && sudo apt-get install -y fakeroot binutils
+      - name: Package Linux .deb
+        continue-on-error: true
+        run: ./gradlew :demo-desktop:packageDeb --no-daemon
       - name: Stage Linux artifacts
         env:
           APP_VERSION: ${{ needs.version.outputs.app_version }}
@@ -61,13 +63,12 @@ jobs:
           test -d "$app_dir"
           tar -C "$(dirname "$app_dir")" -czf "dist/kotlin-tor-demo-${APP_VERSION}-linux-x64.tar.gz" "$(basename "$app_dir")"
           shopt -s nullglob
-          images=(demo-desktop/build/compose/binaries/main/appimage/*.AppImage)
-          if ((${#images[@]} == 0)); then
-            echo "No AppImage produced" >&2
-            exit 1
+          debs=(demo-desktop/build/compose/binaries/main/deb/*.deb)
+          if ((${#debs[@]} > 0)); then
+            cp "${debs[0]}" "dist/kotlin-tor-demo-${APP_VERSION}-linux-x64.deb"
+          else
+            echo "deb not produced; portable tarball is the Linux app."
           fi
-          cp "${images[0]}" "dist/kotlin-tor-demo-${APP_VERSION}-linux-x64.AppImage"
-          chmod +x "dist/kotlin-tor-demo-${APP_VERSION}-linux-x64.AppImage"
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-linux
@@ -238,7 +239,7 @@ jobs:
           else
             tag="v${APP_VERSION}"
           fi
-          notes="Packaged **kotlin-tor-demo** ${APP_VERSION}: Windows/Linux desktop and signed Android release APK.
+          notes="Packaged **kotlin-tor-demo** ${APP_VERSION}: Windows/Linux desktop (portable archives, plus MSI/deb when available) and signed Android release APK.
 
           Not anonymity-audited. Prefer C Tor or Arti for sensitive use."
           if gh release view "$tag" >/dev/null 2>&1; then

@@ -121,7 +121,7 @@ Packaged binary: `demo-desktop/build/compose/binaries/main/app/kotlin-tor-demo/`
 | Workflow | Trigger | Output |
 |----------|---------|--------|
 | [`ci`](.github/workflows/ci.yml) | push / pull request | JVM checks, `:android` + `:demo-android` debug APKs, `:demo-desktop` assemble |
-| [`release`](.github/workflows/release.yml) | tag `v*` or **Actions → release → Run workflow** | Windows zip (+ MSI when WiX is available), Linux AppImage/tarball, **signed** release APK |
+| [`release`](.github/workflows/release.yml) | tag `v*` or **Actions → release → Run workflow** | Windows zip (+ MSI when WiX is available), Linux tarball (+ `.deb` when fakeroot is available), **signed** release APK |
 
 `release` uploads Actions artifacts always. On a `v*` tag — or when **Create or update a GitHub Release** is checked — it also attaches them to the GitHub Release.
 
