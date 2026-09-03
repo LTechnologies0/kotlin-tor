@@ -1,8 +1,17 @@
+import com.android.build.api.variant.FilterConfiguration.FilterType
 import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
 }
+
+/** Every current Android ABI + unique versionCode suffix (universal = 0). */
+val androidAbis = linkedMapOf(
+    "armeabi-v7a" to 1,
+    "arm64-v8a" to 2,
+    "x86" to 3,
+    "x86_64" to 4,
+)
 
 android {
     namespace = "org.kotlintor.demo.android"
@@ -14,6 +23,18 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
         versionName = rootProject.version.toString().substringBefore("-")
+        ndk {
+            abiFilters += androidAbis.keys
+        }
+    }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include(*androidAbis.keys.toTypedArray())
+            isUniversalApk = true
+        }
     }
 
     compileOptions {
@@ -53,6 +74,23 @@ android {
                 "META-INF/NOTICE.md",
                 "META-INF/NOTICE.txt",
             )
+        }
+        jniLibs {
+            // Keep per-ABI .so (zstd-jni, etc.) in the matching split APK.
+            useLegacyPackaging = false
+        }
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            val abi = output.filters
+                .firstOrNull { it.filterType == FilterType.ABI }
+                ?.identifier
+            val suffix = androidAbis[abi] ?: 0
+            val base = output.versionCode.orNull ?: 1
+            output.versionCode.set(base * 10 + suffix)
         }
     }
 }

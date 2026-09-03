@@ -105,6 +105,8 @@ Signed Android release APK (local):
 ```bash
 scripts/android-release-keystore.sh          # once; writes gitignored JKS + keystore.properties
 ./gradlew :demo-android:assembleRelease -Pkotlin.tor.extras=true
+# outputs (ABI splits + universal):
+#   demo-android/build/outputs/apk/release/demo-android-{armeabi-v7a,arm64-v8a,x86,x86_64,universal}-release.apk
 ```
 
 - `:demo-common` — JVM feature runners shared by both GUIs (incl. Linux `DesktopVpnSession`)
@@ -120,15 +122,17 @@ Packaged binary: `demo-desktop/build/compose/binaries/main/app/kotlin-tor-demo/`
 
 | Workflow | Trigger | Output |
 |----------|---------|--------|
-| [`ci`](.github/workflows/ci.yml) | push / pull request | JVM checks, `:android` + `:demo-android` debug APKs, `:demo-desktop` assemble |
-| [`release`](.github/workflows/release.yml) | tag `v*` or **Actions → release → Run workflow** | Windows zip (+ MSI when WiX is available), Linux tarball (+ `.deb` when fakeroot is available), **signed** release APK |
+| [`ci`](.github/workflows/ci.yml) | push / pull request | JVM checks, `:android` + `:demo-android` **debug APKs for every ABI**, `:demo-desktop` assemble |
+| [`release`](.github/workflows/release.yml) | tag `v*` or **Actions → release → Run workflow** | Windows zip (+ MSI when WiX is available), Linux tarball (+ `.deb` when fakeroot is available), Android **armeabi-v7a / arm64-v8a / x86 / x86_64 / universal** APKs (signed when secrets are set) |
 
 `release` uploads Actions artifacts always. On a `v*` tag — or when **Create or update a GitHub Release** is checked — it also attaches them to the GitHub Release.
 
 ### Signed APK secrets
 
-The Android job **fails closed** until these repository secrets exist
+Release APKs are produced for **armeabi-v7a, arm64-v8a, x86, x86_64**, plus a **universal** APK.
+Set these repository secrets to sign them
 (**Settings → Secrets and variables → Actions**). Never commit a keystore.
+Without secrets the job still uploads unsigned ABI APKs.
 
 | Secret | Value |
 |--------|--------|

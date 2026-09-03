@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,3 +31,16 @@ jobs:
           :demo-android:assembleDebug
           :demo-desktop:assemble
           --no-daemon
+      - name: Require debug APKs for every Android ABI
+        run: |
+          set -euo pipefail
+          python3 scripts/android-collect-apks.py \
+            --src demo-android/build/outputs/apk/debug \
+            --dest dist/android-debug \
+            --prefix kotlin-tor-demo-debug \
+            --require-abis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apks
+          path: dist/android-debug/*.apk
+          if-no-files-found: error

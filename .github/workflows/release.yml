@@ -129,77 +129,71 @@ jobs:
         with:
           android: "true"
           extras: "true"
-      - name: Require Android signing secrets
+      - name: Detect Android signing secrets
+        id: signing
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          missing=0
-          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS; do
-            if [ -z "${!name}" ]; then
-              echo "Missing repository secret: $name" >&2
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            echo "Add the secrets listed in README (CI / Release artifacts) and re-run." >&2
-            exit 1
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets missing — assembling unsigned/debug-unsigned ABI APKs so artifacts still exist."
           fi
       - name: Decode release keystore
+        if: steps.signing.outputs.available == 'true'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           test -s "$RUNNER_TEMP/release.keystore"
-      - name: Assemble signed release APK
+      - name: Assemble release APKs (all ABIs)
         env:
-          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          SIGNING_AVAILABLE: ${{ steps.signing.outputs.available }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./gradlew :demo-android:assembleRelease --no-daemon
-      - name: Verify APK signature
+        run: |
+          if [ "$SIGNING_AVAILABLE" = "true" ]; then
+            export ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          fi
+          ./gradlew :demo-android:assembleRelease --no-daemon
+      - name: Stage APKs for every Android ABI
         env:
           APP_VERSION: ${{ needs.version.outputs.app_version }}
         run: |
           set -euo pipefail
-          mkdir -p dist
-          shopt -s nullglob
-          apks=(demo-android/build/outputs/apk/release/*.apk)
-          if ((${#apks[@]} == 0)); then
-            echo "No release APK produced" >&2
-            exit 1
-          fi
-          unsigned=0
-          for apk in "${apks[@]}"; do
-            case "$apk" in
-              *-unsigned.apk) unsigned=1 ;;
-            esac
-          done
-          if [ "$unsigned" -eq 1 ] && ((${#apks[@]} == 1)); then
-            echo "Release APK is unsigned; signing config did not apply." >&2
-            exit 1
-          fi
-          signed=""
-          for apk in "${apks[@]}"; do
-            case "$apk" in
-              *-unsigned.apk) continue ;;
-              *) signed="$apk"; break ;;
-            esac
-          done
-          if [ -z "$signed" ]; then
-            echo "No signed release APK found in ${apks[*]}" >&2
-            exit 1
-          fi
-          dest="dist/kotlin-tor-demo-${APP_VERSION}-release.apk"
-          cp "$signed" "$dest"
+          python3 scripts/android-collect-apks.py \
+            --src demo-android/build/outputs/apk/release \
+            --dest dist \
+            --prefix "kotlin-tor-demo-${APP_VERSION}" \
+            --require-abis
+      - name: Verify APK signatures
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          set -euo pipefail
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -n1)
           if [ -z "$apksigner" ]; then
             echo "apksigner not found under $ANDROID_HOME/build-tools" >&2
             exit 1
           fi
-          "$apksigner" verify --verbose "$dest"
+          shopt -s nullglob
+          apks=(dist/*.apk)
+          if ((${#apks[@]} == 0)); then
+            echo "No staged APKs" >&2
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            case "$apk" in
+              *-unsigned.apk)
+                echo "Unsigned APK after signing was requested: $apk" >&2
+                exit 1
+                ;;
+            esac
+            "$apksigner" verify --verbose "$apk"
+          done
       - name: Wipe keystore
         if: always()
         run: rm -f "$RUNNER_TEMP/release.keystore"
@@ -239,7 +233,7 @@ jobs:
           else
             tag="v${APP_VERSION}"
           fi
-          notes="Packaged **kotlin-tor-demo** ${APP_VERSION}: Windows/Linux desktop (portable archives, plus MSI/deb when available) and signed Android release APK.
+          notes="Packaged **kotlin-tor-demo** ${APP_VERSION}: Windows/Linux desktop (portable archives, plus MSI/deb when available) and Android APKs for armeabi-v7a, arm64-v8a, x86, x86_64, plus universal.
 
           Not anonymity-audited. Prefer C Tor or Arti for sensitive use."
           if gh release view "$tag" >/dev/null 2>&1; then
