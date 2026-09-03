@@ -5,20 +5,28 @@ on:
     branches: [main, master]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: ./.github/actions/setup-kotlin-tor
         with:
-          distribution: temurin
-          java-version: "21"
+          android: "true"
+          extras: "true"
       - name: Gradle check (JVM modules)
         run: ./gradlew :core:check :control:check :proxy:check :cli:compileKotlin --no-daemon
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Android library
-        run: |
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
-          ./gradlew :android:assembleDebug --no-daemon
+      - name: Android library + extras smoke
+        run: >
+          ./gradlew
+          :android:assembleDebug
+          :demo-android:assembleDebug
+          :demo-desktop:assemble
+          --no-daemon

@@ -1,0 +1,47 @@
+name: Setup kotlin-tor build
+description: Temurin 21, Gradle cache, optional Android SDK and extras modules
+
+inputs:
+  android:
+    description: Install Android SDK and write local.properties
+    required: false
+    default: "false"
+  extras:
+    description: Include :demo-* and :integration-tests (kotlin.tor.extras=true)
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: "21"
+        cache: gradle
+
+    - name: Set up Android SDK
+      if: inputs.android == 'true'
+      uses: android-actions/setup-android@v3
+
+    - name: Enable extras modules
+      if: inputs.extras == 'true'
+      shell: bash
+      run: |
+        if grep -q '^kotlin.tor.extras=' gradle.properties 2>/dev/null; then
+          sed -i.bak 's/^kotlin.tor.extras=.*/kotlin.tor.extras=true/' gradle.properties
+          rm -f gradle.properties.bak
+        else
+          printf '\nkotlin.tor.extras=true\n' >> gradle.properties
+        fi
+
+    - name: Write local.properties
+      if: inputs.android == 'true'
+      shell: bash
+      run: |
+        if [ -z "${ANDROID_HOME:-}" ]; then
+          echo "ANDROID_HOME is not set" >&2
+          exit 1
+        fi
+        echo "sdk.dir=${ANDROID_HOME}" > local.properties

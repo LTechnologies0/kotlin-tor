@@ -100,6 +100,13 @@ sudo ./bin/kotlin-tor-demo
 # or: sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" ./bin/kotlin-tor-demo
 ```
 
+Signed Android release APK (local):
+
+```bash
+scripts/android-release-keystore.sh          # once; writes gitignored JKS + keystore.properties
+./gradlew :demo-android:assembleRelease -Pkotlin.tor.extras=true
+```
+
 - `:demo-common` — JVM feature runners shared by both GUIs (incl. Linux `DesktopVpnSession`)
 - `:demo-android` — clean Material 3 shell; VPN / TUN via `VpnService` + OnionTunnel
 - `:demo-desktop` — Compose Desktop Material 3; **Linux full-tunnel** VPN (`/dev/net/tun` + SO_MARK; needs `CAP_NET_ADMIN`)
@@ -108,6 +115,29 @@ sudo ./bin/kotlin-tor-demo
 Desktop VPN excludes **only Tor OR/PT uplink** sockets from the tunnel (SO_MARK + policy routing). Not anonymity-certified; SNAPSHOT.
 
 Packaged binary: `demo-desktop/build/compose/binaries/main/app/kotlin-tor-demo/` (launcher wrapper: [`bin/kotlin-tor-demo`](bin/kotlin-tor-demo)).
+
+## CI / Release artifacts
+
+| Workflow | Trigger | Output |
+|----------|---------|--------|
+| [`ci`](.github/workflows/ci.yml) | push / pull request | JVM checks, `:android` + `:demo-android` debug APKs, `:demo-desktop` assemble |
+| [`release`](.github/workflows/release.yml) | tag `v*` or **Actions → release → Run workflow** | Windows zip (+ MSI when WiX is available), Linux AppImage/tarball, **signed** release APK |
+
+`release` uploads Actions artifacts always. On a `v*` tag — or when **Create or update a GitHub Release** is checked — it also attaches them to the GitHub Release.
+
+### Signed APK secrets
+
+The Android job **fails closed** until these repository secrets exist
+(**Settings → Secrets and variables → Actions**). Never commit a keystore.
+
+| Secret | Value |
+|--------|--------|
+| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 release.jks` (no newlines) |
+| `ANDROID_KEYSTORE_PASSWORD` | JKS store password |
+| `ANDROID_KEY_ALIAS` | key alias (script default: `kotlintor`) |
+| `ANDROID_KEY_PASSWORD` | optional; defaults to the store password |
+
+Local equivalent (gitignored): `keystore.properties` with `storeFile`, `storePassword`, `keyAlias`, `keyPassword`.
 
 ## Specs
 

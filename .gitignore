@@ -9,6 +9,9 @@ local.properties
 out/
 data/
 *.keystore
+*.jks
+*.p12
+keystore.properties
 capture/
 *.apk
 *.aar
