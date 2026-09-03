@@ -13,6 +13,11 @@ allprojects {
     version = "0.1.1"
 }
 
+tasks.register("printVersion") {
+    val projectVersion = provider { version.toString() }
+    doLast { println(projectVersion.get()) }
+}
+
 tasks.register("checkAll") {
     dependsOn(
         ":core:check",

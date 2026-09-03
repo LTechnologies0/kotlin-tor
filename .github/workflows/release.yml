@@ -1,0 +1,249 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Create or update a GitHub Release for this ref
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-kotlin-tor
+      - id: version
+        name: Resolve app version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
+            echo "app_version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_version=$(./gradlew -q printVersion | tail -n1 | sed 's/-SNAPSHOT$//')" >> "$GITHUB_OUTPUT"
+          fi
+
+  desktop-linux:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-kotlin-tor
+        with:
+          extras: "true"
+      - name: Package Linux portable app
+        run: ./gradlew :demo-desktop:createDistributable --no-daemon
+      - name: Install Linux .deb packaging tools
+        continue-on-error: true
+        run: sudo apt-get update && sudo apt-get install -y fakeroot binutils
+      - name: Package Linux .deb
+        continue-on-error: true
+        run: ./gradlew :demo-desktop:packageDeb --no-daemon
+      - name: Stage Linux artifacts
+        env:
+          APP_VERSION: ${{ needs.version.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          app_dir="demo-desktop/build/compose/binaries/main/app/kotlin-tor-demo"
+          test -d "$app_dir"
+          tar -C "$(dirname "$app_dir")" -czf "dist/kotlin-tor-demo-${APP_VERSION}-linux-x64.tar.gz" "$(basename "$app_dir")"
+          shopt -s nullglob
+          debs=(demo-desktop/build/compose/binaries/main/deb/*.deb)
+          if ((${#debs[@]} > 0)); then
+            cp "${debs[0]}" "dist/kotlin-tor-demo-${APP_VERSION}-linux-x64.deb"
+          else
+            echo "deb not produced; portable tarball is the Linux app."
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux
+          path: dist/*
+          if-no-files-found: error
+
+  desktop-windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-kotlin-tor
+        with:
+          extras: "true"
+      - name: Install WiX 3 (jpackage MSI/EXE)
+        continue-on-error: true
+        shell: bash
+        run: |
+          choco install wixtoolset --version=3.14.1 -y --no-progress
+          echo "C:\\Program Files (x86)\\WiX Toolset v3.14\\bin" >> "$GITHUB_PATH"
+      - name: Package Windows portable tree
+        shell: bash
+        run: ./gradlew :demo-desktop:createDistributable --no-daemon
+      - name: Package Windows MSI
+        continue-on-error: true
+        shell: bash
+        run: ./gradlew :demo-desktop:packageMsi --no-daemon
+      - name: Stage Windows artifacts
+        env:
+          APP_VERSION: ${{ needs.version.outputs.app_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          app_dir="demo-desktop/build/compose/binaries/main/app/kotlin-tor-demo"
+          test -d "$app_dir"
+          dest="$GITHUB_WORKSPACE/dist/kotlin-tor-demo-${APP_VERSION}-windows-x64.zip"
+          APP_DIR="$app_dir" DEST="$dest" python -c 'import os, shutil; app_dir=os.path.abspath(os.environ["APP_DIR"]); dest=os.environ["DEST"]; root,_=os.path.splitext(dest); shutil.make_archive(root, "zip", os.path.dirname(app_dir), os.path.basename(app_dir)); print("wrote", dest)'
+          shopt -s nullglob
+          msis=(demo-desktop/build/compose/binaries/main/msi/*.msi)
+          if ((${#msis[@]} > 0)); then
+            cp "${msis[0]}" "dist/kotlin-tor-demo-${APP_VERSION}-windows-x64.msi"
+          else
+            echo "MSI not produced (WiX missing or jpackage skipped); portable zip is the PC app."
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist/*
+          if-no-files-found: error
+
+  android-apk:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-kotlin-tor
+        with:
+          android: "true"
+          extras: "true"
+      - name: Require Android signing secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          missing=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS; do
+            if [ -z "${!name}" ]; then
+              echo "Missing repository secret: $name" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add the secrets listed in README (CI / Release artifacts) and re-run." >&2
+            exit 1
+          fi
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          test -s "$RUNNER_TEMP/release.keystore"
+      - name: Assemble signed release APK
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew :demo-android:assembleRelease --no-daemon
+      - name: Verify APK signature
+        env:
+          APP_VERSION: ${{ needs.version.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          shopt -s nullglob
+          apks=(demo-android/build/outputs/apk/release/*.apk)
+          if ((${#apks[@]} == 0)); then
+            echo "No release APK produced" >&2
+            exit 1
+          fi
+          unsigned=0
+          for apk in "${apks[@]}"; do
+            case "$apk" in
+              *-unsigned.apk) unsigned=1 ;;
+            esac
+          done
+          if [ "$unsigned" -eq 1 ] && ((${#apks[@]} == 1)); then
+            echo "Release APK is unsigned; signing config did not apply." >&2
+            exit 1
+          fi
+          signed=""
+          for apk in "${apks[@]}"; do
+            case "$apk" in
+              *-unsigned.apk) continue ;;
+              *) signed="$apk"; break ;;
+            esac
+          done
+          if [ -z "$signed" ]; then
+            echo "No signed release APK found in ${apks[*]}" >&2
+            exit 1
+          fi
+          dest="dist/kotlin-tor-demo-${APP_VERSION}-release.apk"
+          cp "$signed" "$dest"
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -n1)
+          if [ -z "$apksigner" ]; then
+            echo "apksigner not found under $ANDROID_HOME/build-tools" >&2
+            exit 1
+          fi
+          "$apksigner" verify --verbose "$dest"
+      - name: Wipe keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' || inputs.publish_release
+    needs: [version, desktop-linux, desktop-windows, android-apk]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_VERSION: ${{ needs.version.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*)
+          if ((${#files[@]} == 0)); then
+            echo "No artifacts to publish" >&2
+            exit 1
+          fi
+          ls -la dist
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v${APP_VERSION}"
+          fi
+          notes="Packaged **kotlin-tor-demo** ${APP_VERSION}: Windows/Linux desktop (portable archives, plus MSI/deb when available) and signed Android release APK.
+
+          Not anonymity-audited. Prefer C Tor or Arti for sensitive use."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" --title "kotlin-tor ${tag#v}" --notes "$notes"
+          fi

@@ -32,13 +32,23 @@ compose.desktop {
         nativeDistributions {
             targetFormats(
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.AppImage,
+                org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb,
+                org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
+                org.jetbrains.compose.desktop.application.dsl.TargetFormat.Exe,
             )
             packageName = "kotlin-tor-demo"
-            packageVersion = "0.1.1"
+            packageVersion = rootProject.version.toString().substringBefore("-")
             description = "kotlin-tor Material 3 demo (Linux full-tunnel VPN needs CAP_NET_ADMIN)"
             linux {
                 packageName = "kotlin-tor-demo"
                 menuGroup = "Network"
+            }
+            windows {
+                menuGroup = "Network"
+                dirChooser = true
+                perUserInstall = true
+                // Stable MSI upgrade code — do not change between releases of the same product.
+                upgradeUuid = "a7c3e9d1-2f4b-4e18-9c6a-5d8b1f0e3a27"
             }
         }
     }
