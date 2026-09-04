@@ -17,7 +17,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-kotlin-tor
         with:
           android: "true"
@@ -40,7 +40,7 @@ jobs:
             --prefix kotlin-tor-demo-debug \
             --require-abis \
             --verify-natives
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-debug-apks
           path: dist/android-debug/*.apk
@@ -49,7 +49,7 @@ jobs:
   desktop-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-kotlin-tor
         with:
           extras: "true"
