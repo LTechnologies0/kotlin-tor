@@ -5,6 +5,10 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+configurations.configureEach {
+    exclude(group = "org.conscrypt", module = "conscrypt-openjdk-uber")
+}
+
 /** Every current Android ABI + unique versionCode suffix (universal = 0). */
 val androidAbis = linkedMapOf(
     "armeabi-v7a" to 1,

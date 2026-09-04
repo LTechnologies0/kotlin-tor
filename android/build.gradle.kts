@@ -2,6 +2,10 @@ plugins {
     alias(libs.plugins.android.library)
 }
 
+configurations.configureEach {
+    exclude(group = "org.conscrypt", module = "conscrypt-openjdk-uber")
+}
+
 android {
     namespace = "org.kotlintor.android"
     compileSdk = libs.versions.compileSdk.get().toInt()
