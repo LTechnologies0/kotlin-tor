@@ -6,6 +6,7 @@ import argparse
 import re
 import shutil
 import sys
+import zipfile
 from pathlib import Path
 
 REQUIRED_ABIS = ("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
@@ -29,6 +30,11 @@ def main() -> int:
     parser.add_argument("--dest", required=True, type=Path)
     parser.add_argument("--prefix", required=True)
     parser.add_argument("--require-abis", action="store_true")
+    parser.add_argument(
+        "--verify-natives",
+        action="store_true",
+        help="Require lib/<abi>/*.so in each split and no desktop JNI leftovers",
+    )
     args = parser.parse_args()
 
     if not args.src.is_dir():
@@ -77,8 +83,41 @@ def main() -> int:
         print("Missing universal APK (all-ABI bundle)", file=sys.stderr)
         return 1
 
+    if args.verify_natives:
+        errors = []
+        for abi, dest_name in (
+            (abi, f"{args.prefix}-{abi}.apk") for abi in list(REQUIRED_ABIS) + ["universal"]
+        ):
+            dest = args.dest / dest_name
+            if not dest.is_file():
+                continue
+            errors.extend(verify_android_natives(dest, abi))
+        if errors:
+            print("\n".join(errors), file=sys.stderr)
+            return 1
+
     print("ABIs: " + ", ".join(sorted(found)))
     return 0
+
+
+DESKTOP_NATIVE_PREFIXES = ("win/", "linux/", "darwin/", "freebsd/", "META-INF/native/")
+
+
+def verify_android_natives(apk: Path, abi: str) -> list[str]:
+    with zipfile.ZipFile(apk) as archive:
+        names = archive.namelist()
+    errors: list[str] = []
+    abis = REQUIRED_ABIS if abi == "universal" else (abi,)
+    for wanted in abis:
+        prefix = f"lib/{wanted}/"
+        if not any(name.startswith(prefix) and name.endswith(".so") for name in names):
+            errors.append(f"{apk.name}: missing {prefix}*.so")
+    leaked = [name for name in names if name.startswith(DESKTOP_NATIVE_PREFIXES)]
+    if leaked:
+        preview = ", ".join(leaked[:6])
+        extra = f" (+{len(leaked) - 6} more)" if len(leaked) > 6 else ""
+        errors.append(f"{apk.name}: desktop natives leaked: {preview}{extra}")
+    return errors
 
 
 if __name__ == "__main__":

@@ -73,6 +73,11 @@ android {
                 "META-INF/LICENSE.txt",
                 "META-INF/NOTICE.md",
                 "META-INF/NOTICE.txt",
+                "win/**",
+                "linux/**",
+                "darwin/**",
+                "freebsd/**",
+                "META-INF/native/**",
             )
         }
         jniLibs {
@@ -96,7 +101,10 @@ androidComponents {
 }
 
 dependencies {
-    implementation(project(":demo-common"))
+    implementation(project(":demo-common")) {
+        exclude(group = "com.github.luben", module = "zstd-jni")
+        exclude(group = "org.conscrypt", module = "conscrypt-openjdk-uber")
+    }
     implementation(project(":android"))
     implementation(libs.androidx.core.ktx)
     implementation("androidx.appcompat:appcompat:1.7.1")

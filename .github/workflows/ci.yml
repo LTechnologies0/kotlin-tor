@@ -38,7 +38,8 @@ jobs:
             --src demo-android/build/outputs/apk/debug \
             --dest dist/android-debug \
             --prefix kotlin-tor-demo-debug \
-            --require-abis
+            --require-abis \
+            --verify-natives
       - uses: actions/upload-artifact@v4
         with:
           name: android-debug-apks

@@ -27,11 +27,15 @@ android {
 }
 
 dependencies {
-    api(project(":core"))
+    api(project(":core")) {
+        exclude(group = "com.github.luben", module = "zstd-jni")
+        exclude(group = "org.conscrypt", module = "conscrypt-openjdk-uber")
+    }
     api(project(":control"))
     api(project(":proxy"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.core)
-    // AAR natives for all ABIs (JVM :core pulls the desktop jar classifier).
-    implementation(libs.zstd.jni)
+    // Android AAR ships lib/<abi>/*.so for every current ABI.
+    api(libs.zstd.jni) { artifact { type = "aar"; extension = "aar" } }
+    api(libs.conscrypt.android)
 }

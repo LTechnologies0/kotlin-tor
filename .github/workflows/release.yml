@@ -169,7 +169,8 @@ jobs:
             --src demo-android/build/outputs/apk/release \
             --dest dist \
             --prefix "kotlin-tor-demo-${APP_VERSION}" \
-            --require-abis
+            --require-abis \
+            --verify-natives
       - name: Verify APK signatures
         if: steps.signing.outputs.available == 'true'
         run: |
