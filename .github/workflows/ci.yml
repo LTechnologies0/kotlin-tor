@@ -45,3 +45,14 @@ jobs:
           name: android-debug-apks
           path: dist/android-debug/*.apk
           if-no-files-found: error
+
+  desktop-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-kotlin-tor
+        with:
+          extras: "true"
+      - name: Windows desktop smoke (compile + assemble)
+        shell: bash
+        run: ./gradlew :demo-desktop:assemble --no-daemon
