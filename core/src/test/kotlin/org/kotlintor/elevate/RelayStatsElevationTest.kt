@@ -13,7 +13,7 @@ import org.kotlintor.relay.RepHist
 import org.kotlintor.relay.RouterKeys
 import org.kotlintor.relay.Selftest
 import org.kotlintor.stats.ConnStats
-import org.kotlintor.stats.GeoipStats
+import org.kotlintor.stats.GeoIpStats
 import java.nio.file.Files
 
 /**
@@ -46,9 +46,9 @@ class RelayStatsElevationTest {
         ConnStats.init()
         ConnStats.noteOrConnBytes(1L, 10, 20)
         assertTrue(ConnStats.format().contains("conn-bi-direct"))
-        GeoipStats.setEntryEnabled(true)
-        assertTrue(GeoipStats.entryEnabled())
-        assertTrue(GeoipStats.formatEntryStats().isNotEmpty())
+        GeoIpStats.entryEnabled = true
+        assertTrue(GeoIpStats.entryEnabled)
+        assertTrue(GeoIpStats.formatEntryStats().isNotEmpty())
         PredictPorts.clear()
         PredictPorts.noteUse(443)
         assertEquals(listOf(443), PredictPorts.predicted())
