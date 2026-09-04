@@ -105,10 +105,7 @@ androidComponents {
 }
 
 dependencies {
-    implementation(project(":demo-common")) {
-        exclude(group = "com.github.luben", module = "zstd-jni")
-        exclude(group = "org.conscrypt", module = "conscrypt-openjdk-uber")
-    }
+    implementation(project(":demo-common"))
     implementation(project(":android"))
     implementation(libs.androidx.core.ktx)
     implementation("androidx.appcompat:appcompat:1.7.1")

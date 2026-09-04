@@ -31,15 +31,11 @@ android {
 }
 
 dependencies {
-    api(project(":core")) {
-        exclude(group = "com.github.luben", module = "zstd-jni")
-        exclude(group = "org.conscrypt", module = "conscrypt-openjdk-uber")
-    }
+    api(project(":core"))
     api(project(":control"))
     api(project(":proxy"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.core)
-    // Android AAR ships lib/<abi>/*.so for every current ABI.
-    api(libs.zstd.jni) { artifact { type = "aar"; extension = "aar" } }
+    // Per-ABI lib/<abi>/*.so. OpenJDK Conscrypt is excluded above.
     api(libs.conscrypt.android)
 }
