@@ -116,3 +116,19 @@ object GeoIpStats {
         entryStarted = System.currentTimeMillis() / 1000
     }
 }
+
+/**
+ * Naming primary for `geoip_stats.c` (STEM GeoipStats).
+ *
+ * Facade kept in this file so Windows CI does not hit a case-only filename clash
+ * with [GeoIpStats] (`GeoIpStats.kt` vs `GeoipStats.kt`).
+ */
+object GeoipStats {
+    fun entryEnabled(): Boolean = GeoIpStats.entryEnabled
+
+    fun setEntryEnabled(v: Boolean) {
+        GeoIpStats.entryEnabled = v
+    }
+
+    fun formatEntryStats(): String = GeoIpStats.formatEntryStats()
+}
