@@ -33,7 +33,7 @@ class SparklineView @JvmOverloads constructor(
     private var values: FloatArray = FloatArray(0)
 
     init {
-        val primary = MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary)
+        val primary = MaterialColors.getColor(this, androidx.appcompat.R.attr.colorPrimary)
         val outline = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutlineVariant)
         linePaint.color = primary
         fillPaint.color = (primary and 0x00FFFFFF) or 0x33000000
