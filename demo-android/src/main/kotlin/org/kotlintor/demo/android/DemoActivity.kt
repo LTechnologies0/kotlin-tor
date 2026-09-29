@@ -185,8 +185,8 @@ class DemoActivity : AppCompatActivity() {
         }
         binding.navView.setCheckedItem(R.id.nav_home)
         binding.navView.setNavigationItemSelectedListener { select(it.itemId) }
-        binding.navRail.setOnItemSelectedListener { select(it.itemId) }
-        binding.navRail.selectedItemId = R.id.nav_home
+        binding.navRail.setCheckedItem(R.id.nav_home)
+        binding.navRail.setNavigationItemSelectedListener { select(it.itemId) }
     }
 
     private fun showPanel(navId: Int) {
@@ -232,7 +232,7 @@ class DemoActivity : AppCompatActivity() {
         if (navId != R.id.nav_logs) stopProfilerSampling()
         binding.toolbar.title = title
         binding.navView.setCheckedItem(navId)
-        if (useRail) binding.navRail.selectedItemId = navId
+        if (useRail) binding.navRail.setCheckedItem(navId)
     }
 
     private fun wireHome() {

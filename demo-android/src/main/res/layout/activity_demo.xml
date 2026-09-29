@@ -1,30 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- DrawerLayout must be the root (MeasureSpec.EXACTLY). Do not nest it under LinearLayout+weight. -->
+<androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:id="@+id/shellRoot"
+    android:id="@+id/drawerLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fitsSystemWindows="true"
-    android:orientation="horizontal">
+    android:fitsSystemWindows="true">
 
-    <com.google.android.material.navigationrail.NavigationRailView
-        android:id="@+id/navRail"
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:id="@+id/shellRoot"
+        android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:visibility="gone"
-        app:headerLayout="@layout/nav_header"
-        app:labelVisibilityMode="labeled"
-        app:menu="@menu/nav_drawer" />
+        android:orientation="horizontal">
 
-    <androidx.drawerlayout.widget.DrawerLayout
-        android:id="@+id/drawerLayout"
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1">
+        <!-- Permanent side nav for wide screens (NavigationView has no 7-item rail cap). -->
+        <com.google.android.material.navigation.NavigationView
+            android:id="@+id/navRail"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:visibility="gone"
+            app:headerLayout="@layout/nav_header"
+            app:menu="@menu/nav_drawer" />
 
         <androidx.coordinatorlayout.widget.CoordinatorLayout
-            android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1">
 
             <com.google.android.material.appbar.AppBarLayout
                 android:layout_width="match_parent"
@@ -89,14 +90,14 @@
                     android:visibility="gone" />
             </FrameLayout>
         </androidx.coordinatorlayout.widget.CoordinatorLayout>
+    </LinearLayout>
 
-        <com.google.android.material.navigation.NavigationView
-            android:id="@+id/navView"
-            android:layout_width="wrap_content"
-            android:layout_height="match_parent"
-            android:layout_gravity="start"
-            android:fitsSystemWindows="true"
-            app:headerLayout="@layout/nav_header"
-            app:menu="@menu/nav_drawer" />
-    </androidx.drawerlayout.widget.DrawerLayout>
-</LinearLayout>
+    <com.google.android.material.navigation.NavigationView
+        android:id="@+id/navView"
+        android:layout_width="wrap_content"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:fitsSystemWindows="true"
+        app:headerLayout="@layout/nav_header"
+        app:menu="@menu/nav_drawer" />
+</androidx.drawerlayout.widget.DrawerLayout>
