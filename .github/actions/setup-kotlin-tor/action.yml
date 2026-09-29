@@ -21,9 +21,15 @@ runs:
         java-version: "21"
         cache: gradle
 
-    - name: Set up Android SDK
+    - name: Use the preinstalled Android SDK
       if: inputs.android == 'true'
-      uses: android-actions/setup-android@v3
+      shell: bash
+      run: |
+        if [ -z "${ANDROID_HOME:-}" ]; then
+          echo "ANDROID_HOME is not set" >&2
+          exit 1
+        fi
+        yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
 
     - name: Enable extras modules
       if: inputs.extras == 'true'
