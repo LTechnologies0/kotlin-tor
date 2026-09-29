@@ -26,7 +26,7 @@ jobs:
     outputs:
       app_version: ${{ steps.version.outputs.app_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-kotlin-tor
       - id: version
         name: Resolve app version
@@ -41,7 +41,7 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-kotlin-tor
         with:
           extras: "true"
@@ -69,7 +69,7 @@ jobs:
           else
             echo "deb not produced; portable tarball is the Linux app."
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-linux
           path: dist/*
@@ -79,7 +79,7 @@ jobs:
     needs: version
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-kotlin-tor
         with:
           extras: "true"
@@ -114,7 +114,7 @@ jobs:
           else
             echo "MSI not produced (WiX missing or jpackage skipped); portable zip is the PC app."
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-windows
           path: dist/*
@@ -124,7 +124,7 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-kotlin-tor
         with:
           android: "true"
@@ -198,7 +198,7 @@ jobs:
       - name: Wipe keystore
         if: always()
         run: rm -f "$RUNNER_TEMP/release.keystore"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-apk
           path: dist/*.apk
@@ -211,8 +211,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
