@@ -65,6 +65,7 @@ object MicrodescConsensusParser {
                     )
                 }
                 line.startsWith("m ") -> cur?.microDigestB64 = line.removePrefix("m ").trim()
+                line.startsWith("p ") -> cur?.exitPolicySummary = line.removePrefix("p ").trim()
                 line.startsWith("s ") -> cur?.flags = line.removePrefix("s ").split(' ').filter { it.isNotEmpty() }.toSet()
                 line.startsWith("v ") -> cur?.version = line.removePrefix("v ").trim()
                 line.startsWith("pr ") -> {
@@ -120,10 +121,20 @@ object MicrodescConsensusParser {
         var proto: Map<String, String> = emptyMap(),
         var bandwidth: Long = 0,
         var microDigestB64: String? = null,
+        var exitPolicySummary: String? = null,
     ) {
         fun build() = RouterStatus(
             nickname, identity, digest, publication, ip, orPort, dirPort,
             flags, version, proto, bandwidth,
+            microdescDigest = microDigestB64?.let { decodeMicroDigest(it) },
+            exitPolicySummary = exitPolicySummary,
         )
+    }
+
+    private fun decodeMicroDigest(b64: String): ByteArray? {
+        var s = b64
+        while (s.length % 4 != 0) s += "="
+        val d = runCatching { java.util.Base64.getDecoder().decode(s) }.getOrNull() ?: return null
+        return if (d.size == 32) d else null
     }
 }

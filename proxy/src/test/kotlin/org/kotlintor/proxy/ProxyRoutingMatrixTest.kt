@@ -259,6 +259,26 @@ class ProxyRoutingMatrixTest {
     }
 
     @Test
+    fun `udp associate without gateway replies command not supported 0x07`() {
+        val socks = Socks5Server(dialer, scope)
+        socks.start(ListenSpec("127.0.0.1", 0))
+        val socksPort = awaitBound { socks.boundPort() }
+        try {
+            Socket("127.0.0.1", socksPort).use { ctrl ->
+                val out = ctrl.getOutputStream()
+                val inp = ctrl.getInputStream()
+                out.write(byteArrayOf(0x05, 0x01, 0x00)); out.flush()
+                assertEquals(0x05, inp.read()); assertEquals(0x00, inp.read())
+                out.write(byteArrayOf(0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0)); out.flush()
+                assertEquals(0x05, inp.read())
+                assertEquals(0x07, inp.read())
+            }
+        } finally {
+            socks.stop()
+        }
+    }
+
+    @Test
     fun `udp associate via tor gateway routes datagram`() {
         // Gateway listens clearnet; SOCKS UDP ASSOCIATE tunnels through dialer to gateway
         val gw = UdpTorGatewayServer(scope)

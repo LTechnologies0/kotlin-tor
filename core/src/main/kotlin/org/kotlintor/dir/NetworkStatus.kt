@@ -86,23 +86,38 @@ object NetworkStatus {
 
     /**
      * C Tor `networkstatus_check_consensus_signature` —
-     * structural gate: document must contain ≥1 `directory-signature` block.
-     * Full authority-cert RSA/Ed verify is [DetachedSignatures] / dirauth path;
-     * this does not invent a green quorum from a bare network-status preamble.
+     * RSA-PKCS1 verify of directory-signature blocks over the document digest,
+     * pinned to [DefaultAuthorities] (or [AuthCert] cache) with majority quorum.
+     * A fake / structural-only `directory-signature` line **fails**.
      */
     fun networkstatusCheckConsensusSignature(consensus: Consensus): Boolean {
         if (consensus.raw.isBlank()) return false
-        return consensus.raw.contains("directory-signature")
+        val known = DefaultAuthorities.ALL.map { it.v3Ident }.toSet()
+        val certs = AuthCert.authorityCertGetAll()
+        val r = ConsensusVerifier.verify(consensus, certs, known)
+        return r.ok
     }
 
     /**
      * C Tor `networkstatus_check_document_signature` —
-     * require non-empty identity + signature bytes (crypto check needs cert elsewhere).
+     * RSA-PKCS1 checksig against a cached authority cert. Empty/fake blobs fail.
      */
-    fun networkstatusCheckDocumentSignature(sig: DocumentSignature): Boolean =
-        sig.signature.isNotEmpty() &&
-            sig.identityHex.isNotBlank() &&
-            sig.signingKeyDigestHex.isNotBlank()
+    fun networkstatusCheckDocumentSignature(sig: DocumentSignature): Boolean {
+        if (sig.signature.isEmpty() || sig.identityHex.isBlank()) return false
+        val cert = AuthCert.authorityCertGetBySkDigest(sig.signingKeyDigestHex)
+            ?: AuthCert.authorityCertGetNewestById(sig.identityHex)
+            ?: return false
+        if (!AuthorityCert.verify(cert)) return false
+        val pub = AuthorityCert.rsaPublicKeyFromPkcs1(cert.signingPkcs1)
+        return try {
+            val cipher = javax.crypto.Cipher.getInstance("RSA/ECB/PKCS1Padding")
+            cipher.init(javax.crypto.Cipher.DECRYPT_MODE, pub)
+            val d = cipher.doFinal(sig.signature)
+            d.size == 20 || d.size == 32
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     /** C Tor `networkstatus_consensus_can_use_multiple_directories`. */
     fun networkstatusConsensusCanUseMultipleDirectories(): Boolean = true

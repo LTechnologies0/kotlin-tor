@@ -50,6 +50,8 @@ class PathSelector(
     private val families = mutableMapOf<String, Set<String>>()
     private val vanguards = VanguardsLite(config)
     val entryGuardFsm: EntryGuardFsm = EntryGuardFsm()
+    @Volatile
+    private var bwWeights: BandwidthWeights = BandwidthWeights.fromParams(emptyMap())
     private val recentHops = RecentHopAvoider(
         capacity = config.circuitRecentHopHistorySize.coerceIn(1, 10_000),
     )
@@ -57,6 +59,10 @@ class PathSelector(
     /** Optional GeoIP DB for country/continent diversity (set by [TorClient]). */
     @Volatile
     var geoIp: GeoIp.Database? = null
+
+    fun noteConsensusParams(params: Map<String, Long>) {
+        bwWeights = BandwidthWeights.fromParams(params)
+    }
 
     fun noteFamily(fingerprintHex: String, members: Set<String>) {
         val fp = fingerprintHex.uppercase()
@@ -130,9 +136,16 @@ class PathSelector(
         val exits = relays.filter {
             it.isExit && allowed(it) &&
                 it.fingerprintHex !in config.excludeExitNodes.map { e -> e.uppercase() } &&
-                inAllowlist(it, config.exitNodes)
+                inAllowlist(it, config.exitNodes) &&
+                (exitPort == null || it.allowsExitPort(exitPort) || it.exitPolicySummary == null)
         }.let { pool ->
-            if (preferStable) pool.filter { it.isStable }.ifEmpty { pool } else pool
+            val byPolicy = if (exitPort != null) {
+                pool.filter { it.exitPolicySummary == null || it.allowsExitPort(exitPort) }
+            } else {
+                pool
+            }
+            val use = byPolicy.ifEmpty { pool }
+            if (preferStable) use.filter { it.isStable }.ifEmpty { use } else use
         }
 
         require(guards.isNotEmpty()) { "no usable guards in consensus" }
@@ -143,7 +156,7 @@ class PathSelector(
         val guard = bridgeGuard ?: if (config.useEntryGuards) {
             pickGuard(guards)
         } else {
-            weightedPick(guards)
+            weightedPick(guards, BandwidthWeights.Role.GUARD)
         }
         val prior = mutableListOf(guard)
 
@@ -297,30 +310,18 @@ class PathSelector(
                         "path: relaxed diversity for $role to level=$idx (pool was empty)",
                     )
                 }
-                return weightedPick(diversityCandidatePool(filtered))
+                return weightedPick(filtered, roleToWeight(role))
             }
         }
-        return weightedPick(diversityCandidatePool(pool))
+        return weightedPick(pool, roleToWeight(role))
     }
 
-    /**
-     * When the pool is large, take a SecureRandom subsample of the top bandwidth
-     * relays so the heaviest exit is not almost-deterministic.
-     */
-    private fun diversityCandidatePool(relays: List<RouterStatus>): List<RouterStatus> {
-        if (relays.size <= DIVERSITY_TOP_K) return relays
-        val top = relays.sortedByDescending { it.bandwidth.coerceAtLeast(1) }
-            .take(DIVERSITY_TOP_K * 2)
-            .toMutableList()
-        // Fisher–Yates shuffle then keep K.
-        for (i in top.lastIndex downTo 1) {
-            val j = SecureRandomSource.nextInt(i + 1)
-            val tmp = top[i]
-            top[i] = top[j]
-            top[j] = tmp
+    private fun roleToWeight(role: String): BandwidthWeights.Role =
+        when (role) {
+            "exit" -> BandwidthWeights.Role.EXIT
+            "guard" -> BandwidthWeights.Role.GUARD
+            else -> BandwidthWeights.Role.MIDDLE
         }
-        return top.take(DIVERSITY_TOP_K)
-    }
 
     private fun pickGuard(guards: List<RouterStatus>): RouterStatus {
         val now = System.currentTimeMillis()
@@ -345,7 +346,7 @@ class PathSelector(
         while (sampled.size < sampleSize) {
             val candidates = guards.filter { g -> sampled.none { it.fingerprintHex == g.fingerprintHex } }
             if (candidates.isEmpty()) break
-            val pick = weightedPick(candidates)
+            val pick = weightedPick(candidates, BandwidthWeights.Role.GUARD)
             sampled += GuardEntry(
                 fingerprintHex = pick.fingerprintHex,
                 firstListedMs = now,
@@ -366,13 +367,17 @@ class PathSelector(
         return guards.first { it.fingerprintHex.equals(fp, ignoreCase = true) }
     }
 
-    private fun weightedPick(relays: List<RouterStatus>): RouterStatus {
+    private fun weightedPick(
+        relays: List<RouterStatus>,
+        role: BandwidthWeights.Role = BandwidthWeights.Role.MIDDLE,
+    ): RouterStatus {
         require(relays.isNotEmpty()) { "empty relay list for weighted pick" }
-        val total = relays.sumOf { it.bandwidth.coerceAtLeast(1) }.coerceAtLeast(1L)
+        val weights = relays.map { bwWeights.weight(it, role).coerceAtLeast(1) }
+        val total = weights.sum().coerceAtLeast(1L)
         var r = SecureRandomSource.nextLong(total)
-        for (relay in relays) {
-            r -= relay.bandwidth.coerceAtLeast(1)
-            if (r < 0) return relay
+        for (i in relays.indices) {
+            r -= weights[i]
+            if (r < 0) return relays[i]
         }
         return relays.last()
     }

@@ -36,6 +36,10 @@ data class RouterStatus(
     val bandwidth: Long,
     val ntorOnionKey: ByteArray? = null,
     val ed25519Identity: ByteArray? = null,
+    /** SHA-256 of the microdescriptor (`m` line), when flavor=microdesc. */
+    val microdescDigest: ByteArray? = null,
+    /** Microdesc `p accept|reject PortList` summary. */
+    val exitPolicySummary: String? = null,
 ) {
     val isGuard get() = "Guard" in flags
     val isExit get() = "Exit" in flags && "BadExit" !in flags
@@ -81,6 +85,10 @@ data class RouterStatus(
 
     /** Conflux=1 (prop329). */
     val supportsConflux: Boolean get() = supportsProto("Conflux", 1)
+
+    /** True if [exitPolicySummary] allows [port] (unknown summary → false). */
+    fun allowsExitPort(port: Int): Boolean =
+        MicrodescExitPolicy.allowsPort(exitPolicySummary, port)
 
     override fun equals(other: Any?): Boolean =
         other is RouterStatus && identity.contentEquals(other.identity)
@@ -218,6 +226,16 @@ object ConsensusParser {
 
 object MicrodescParser {
     fun parseOnionKey(microdesc: String): ByteArray? = DescriptorParser.parseNtorOnionKey(microdesc)
+
+    fun parseExitPolicySummary(microdesc: String): String? {
+        for (line in microdesc.lineSequence()) {
+            if (line.startsWith("p ")) return MicrodescExitPolicy.parseSummary(line)
+        }
+        return null
+    }
+
+    fun sha256(microdesc: String): ByteArray =
+        org.kotlintor.crypto.Digests.sha256(microdesc.toByteArray(Charsets.US_ASCII))
 
     fun splitDocuments(body: String): List<String> {
         val docs = mutableListOf<String>()

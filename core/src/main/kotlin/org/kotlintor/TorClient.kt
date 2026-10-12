@@ -1,8 +1,11 @@
 package org.kotlintor
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.kotlintor.dir.DirHttp
+import org.kotlintor.dir.MicrodescParser
 import org.kotlintor.circuit.Circuit
 import org.kotlintor.circuit.CircuitManager
 import org.kotlintor.circuit.HopKeys
@@ -126,6 +129,8 @@ class TorClient(
     private var readyCircuit: Circuit? = null
     /** IsolateSOCKSAuth: one exit circuit per SOCKS username. */
     private val isolatedCircuits = linkedMapOf<String, Circuit>()
+    private val inFlightBuilds = linkedMapOf<String, CompletableDeferred<Circuit>>()
+    private var dirCircuit: Circuit? = null
     private val onionClient = OnionClient(
         dir = dir,
         paths = paths,
@@ -161,16 +166,24 @@ class TorClient(
             BootstrapPhase.REQUESTING_STATUS,
             summary = "Fetching $flavor consensus",
         )
-        val c = if (config.useMicrodescriptors) {
-            // Prefer microdesc-flavored consensus when UseMicrodescriptors=1; fall back to ns.
+        val c0 = if (config.useMicrodescriptors) {
             runCatching { dir.fetchMicrodescConsensus() }.getOrElse { dir.fetchConsensus() }
         } else {
             dir.fetchConsensus()
         }
+        var c = c0
         consensus = c
         routerList.clear()
         routerList.addAll(c.relays)
         circuits.applyConsensusParams(c.params)
+        paths.noteConsensusParams(c.params)
+        runCatching { attachDirectoryGuard(c) }
+        if (dir.beginDirGet != null) {
+            c = runCatching { enrichFromMicrodescs(c) }.getOrDefault(c)
+            consensus = c
+            routerList.clear()
+            routerList.addAll(c.relays)
+        }
         bootstrap.advance(
             BootstrapPhase.LOADING_STATUS,
             summary = "Loaded consensus: ${c.relays.size} relays valid-after=${c.validAfter}",
@@ -203,8 +216,13 @@ class TorClient(
         var lastError: Exception? = null
         val excluded = mutableSetOf<String>()
         repeat(8) { attempt ->
+            val p = try {
+                paths.select(c.relays, extraExclude = excluded, rotateGuard = false)
+            } catch (e: Exception) {
+                lastError = e
+                return@repeat
+            }
             try {
-                val p = paths.select(c.relays, extraExclude = excluded, rotateGuard = attempt > 0)
                 ensureHopKeys(p.guard.fingerprintHex)
                 ensureHopKeys(p.middle.fingerprintHex)
                 ensureHopKeys(p.exit.fingerprintHex)
@@ -225,6 +243,7 @@ class TorClient(
                         "${p.guard.nickname}→${p.middle.nickname}→${p.exit.nickname}",
                 )
                 readyCircuit = circuits.buildCircuit(p, hopKeys)
+                dir.circuitExists = true
                 paths.confirmGuard(p.guard.fingerprintHex)
                 bootstrap.advance(
                     BootstrapPhase.DONE,
@@ -237,8 +256,8 @@ class TorClient(
                 System.err.println(
                     "circuit attempt ${attempt + 1} failed: ${e.javaClass.simpleName}: ${e.message}",
                 )
-                // On resource exhaustion / protocol errors, force a new guard next attempt.
-                paths.rotateGuard()
+                paths.noteGuardFailure(p.guard.fingerprintHex)
+                excluded += p.guard.fingerprintHex
             }
         }
         throw IllegalStateException("circuit bootstrap failed after retries", lastError)
@@ -282,7 +301,7 @@ class TorClient(
         }
         if (config.clientRejectInternalAddresses &&
             !HsClient.isOnionHost(dest) &&
-            org.kotlintor.net.PrivateAddresses.isPrivate(dest)
+            org.kotlintor.net.PrivateAddresses.isPrivateLiteral(dest)
         ) {
             error("ClientRejectInternalAddresses: refusing private destination $dest")
         }
@@ -290,16 +309,14 @@ class TorClient(
             val c = mutex.withLock { consensus } ?: error("no consensus; call bootstrap() first")
             return onionClient.connect(dest, port, c)
         }
-        return mutex.withLock {
-            val key = buildIsolationKey(
-                socksUser = isolationKey,
-                host = dest,
-                port = port,
-                clientAddr = clientAddr,
-            )
-            val circ = circuitForIsolation(key, dest, exitPort = port)
-            circ.openStream(dest, port, optimisticData = optimisticData)
-        }
+        val key = buildIsolationKey(
+            socksUser = isolationKey,
+            host = dest,
+            port = port,
+            clientAddr = clientAddr,
+        )
+        val circ = obtainCircuit(key, dest, exitPort = port)
+        return circ.openStream(dest, port, optimisticData = optimisticData)
     }
 
     /**
@@ -315,10 +332,8 @@ class TorClient(
     ): TorStream {
         if (dormant) error("TorClient dormant: refusing new streams")
         val dest = automap?.reverse(host) ?: host
-        return mutex.withLock {
-            val circ = circuitForIsolation(circuitIsolationKey, dest, exitPort = port)
-            circ.openStream(dest, port, optimisticData = optimisticData)
-        }
+        val circ = obtainCircuit(circuitIsolationKey, dest, exitPort = port)
+        return circ.openStream(dest, port, optimisticData = optimisticData)
     }
 
     /**
@@ -335,24 +350,22 @@ class TorClient(
             if (automap != null && automap.shouldAutomap(hostname)) {
                 return listOf(automap.getOrAssign(hostname))
             }
-            if (config.clientDnsRejectInternalAddresses &&
-                org.kotlintor.net.PrivateAddresses.isPrivate(hostname)
-            ) {
-                return emptyList()
-            }
-            if (config.dnssecMode == org.kotlintor.net.dns.DnssecMode.VALIDATE) {
-                // Must not hold [mutex] — DNSSEC opens streams via [connect].
-                return@withLock
-            }
-            val circ = circuitForIsolation(dnsIso, hostname)
+        }
+        if (config.clientDnsRejectInternalAddresses &&
+            org.kotlintor.net.PrivateAddresses.isPrivateLiteral(hostname)
+        ) {
+            return emptyList()
+        }
+        if (config.dnssecMode == org.kotlintor.net.dns.DnssecMode.VALIDATE) {
             return try {
-                circ.resolve(hostname)
+                resolveDnssec(hostname, dnsIso)
             } finally {
-                releaseDnsRequestCircuit(dnsIso)
+                mutex.withLock { releaseDnsRequestCircuit(dnsIso) }
             }
         }
+        val circ = obtainCircuit(dnsIso, hostname)
         return try {
-            resolveDnssec(hostname, dnsIso)
+            circ.resolve(hostname)
         } finally {
             mutex.withLock { releaseDnsRequestCircuit(dnsIso) }
         }
@@ -381,6 +394,78 @@ class TorClient(
 
     private fun releaseDnsRequestCircuit(dnsIso: String) {
         isolatedCircuits.remove(dnsIso)?.close()
+        inFlightBuilds.remove(dnsIso)
+    }
+
+    private suspend fun attachDirectoryGuard(c: Consensus) {
+        val dirRelays = c.relays.filter {
+            it.isRunning && "V2Dir" in it.flags && it.orPort > 0
+        }.ifEmpty {
+            authoritiesAsRouters()
+        }
+        if (dirRelays.isEmpty()) return
+        val pick = dirRelays[kotlin.random.Random.nextInt(dirRelays.size)]
+        val circ = try {
+            circuits.buildOneHopDirCircuit(pick, useCreateOnehop = true)
+        } catch (_: Exception) {
+            circuits.buildOneHopDirCircuit(pick, useCreateOnehop = false)
+        }
+        dirCircuit = circ
+        dir.circuitExists = true
+        dir.beginDirGet = { path ->
+            val stream = circ.openDirStream()
+            try {
+                DirHttp.httpGetOverPipe(
+                    write = { b -> stream.write(b) },
+                    readAll = { stream.readHttpResponse() },
+                    path = path,
+                )
+            } finally {
+                runCatching { stream.close() }
+            }
+        }
+    }
+
+    private fun authoritiesAsRouters(): List<RouterStatus> =
+        org.kotlintor.dir.DefaultAuthorities.ALL.map { a ->
+            val id = org.kotlintor.util.hexToBytes(a.v3Ident)
+            RouterStatus(
+                nickname = a.nickname,
+                identity = id,
+                digest = ByteArray(20),
+                publication = java.time.Instant.EPOCH,
+                ip = a.address,
+                orPort = a.orPort,
+                dirPort = a.dirPort,
+                flags = setOf("Running", "Fast", "V2Dir", "Authority"),
+                version = null,
+                proto = emptyMap(),
+                bandwidth = 1,
+            )
+        }
+
+    private suspend fun enrichFromMicrodescs(c: Consensus): Consensus {
+        val withDigest = c.relays.filter { it.microdescDigest != null }
+        val missing = withDigest.mapNotNull { it.microdescDigest }
+        val byHex = LinkedHashMap<String, String>()
+        for (chunk in missing.chunked(16)) {
+            val got = dir.fetchMicrodescriptors(chunk)
+            byHex.putAll(got)
+        }
+        val updated = c.relays.map { r ->
+            val d = r.microdescDigest ?: return@map r
+            val body = byHex[d.joinToString("") { "%02x".format(it) }] ?: return@map r
+            val ntor = MicrodescParser.parseOnionKey(body)
+            if (ntor != null && r.fingerprintHex !in hopKeys) {
+                hopKeys[r.fingerprintHex] = HopKeys(ntor, DescriptorParser.parseEd25519Identity(body))
+            }
+            r.copy(
+                ntorOnionKey = ntor ?: r.ntorOnionKey,
+                ed25519Identity = DescriptorParser.parseEd25519Identity(body) ?: r.ed25519Identity,
+                exitPolicySummary = MicrodescParser.parseExitPolicySummary(body) ?: r.exitPolicySummary,
+            )
+        }
+        return c.copy(relays = updated)
     }
 
     private fun dirtyTimeoutMsFor(isolationKey: String?): Long {
@@ -414,45 +499,82 @@ class TorClient(
         return parts.takeIf { it.isNotEmpty() }?.joinToString("|")
     }
 
-    private suspend fun circuitForIsolation(
+    private suspend fun obtainCircuit(
         isolationKey: String?,
         host: String,
         exitPort: Int? = null,
     ): Circuit {
-        if (!isolationKey.isNullOrEmpty()) {
-            isolatedCircuits[isolationKey]?.let { existing ->
-                if (!existing.isTooDirtyForAttach(dirtyTimeoutMsFor(isolationKey))) {
-                    return existing
-                }
-                existing.close()
-                isolatedCircuits.remove(isolationKey)
-            }
-            val c = consensus ?: error("no consensus; call bootstrap() first")
-            val path = paths.select(c.relays, host, exitPort = exitPort)
-            ensureHopKeys(path.guard.fingerprintHex)
-            ensureHopKeys(path.middle.fingerprintHex)
-            ensureHopKeys(path.exit.fingerprintHex)
-            evictIsolatedIfNeeded()
-            val circ = circuits.buildCircuit(path, hopKeys)
-            paths.confirmGuard(path.guard.fingerprintHex)
-            isolatedCircuits[isolationKey] = circ
-            bootstrap.advance(BootstrapPhase.DONE)
-            return circ
+        val mapKey = isolationKey ?: DEFAULT_ISOLATION
+        mutex.withLock {
+            peekLiveCircuit(isolationKey)?.let { return it }
         }
-        val existing = readyCircuit
-        if (existing != null && !existing.isTooDirtyForAttach(dirtyTimeoutMsFor(null))) {
+        val created = CompletableDeferred<Circuit>()
+        val waiter: CompletableDeferred<Circuit>? = mutex.withLock {
+            peekLiveCircuit(isolationKey)?.let { existing ->
+                created.complete(existing)
+                return@withLock null
+            }
+            val inflight = inFlightBuilds[mapKey]
+            if (inflight != null) {
+                inflight
+            } else {
+                inFlightBuilds[mapKey] = created
+                null
+            }
+        }
+        if (waiter != null) return waiter.await()
+        try {
+            val circ = buildFreshCircuit(isolationKey, host, exitPort)
+            mutex.withLock {
+                if (isolationKey.isNullOrEmpty()) {
+                    readyCircuit = circ
+                } else {
+                    evictIsolatedIfNeeded()
+                    isolatedCircuits[isolationKey] = circ
+                }
+                inFlightBuilds.remove(mapKey)
+            }
+            created.complete(circ)
+            return circ
+        } catch (e: Exception) {
+            mutex.withLock { inFlightBuilds.remove(mapKey) }
+            created.completeExceptionally(e)
+            throw e
+        }
+    }
+
+    private fun peekLiveCircuit(isolationKey: String?): Circuit? {
+        if (!isolationKey.isNullOrEmpty()) {
+            val existing = isolatedCircuits[isolationKey] ?: return null
+            if (!existing.dead && !existing.isTooDirtyForAttach(dirtyTimeoutMsFor(isolationKey))) {
+                return existing
+            }
+            existing.close()
+            isolatedCircuits.remove(isolationKey)
+            return null
+        }
+        val existing = readyCircuit ?: return null
+        if (!existing.dead && !existing.isTooDirtyForAttach(dirtyTimeoutMsFor(null))) {
             return existing
         }
-        existing?.close()
+        existing.close()
         readyCircuit = null
-        val c = consensus ?: error("no consensus; call bootstrap() first")
+        return null
+    }
+
+    private suspend fun buildFreshCircuit(
+        isolationKey: String?,
+        host: String,
+        exitPort: Int?,
+    ): Circuit {
+        val c = mutex.withLock { consensus } ?: error("no consensus; call bootstrap() first")
         val path = paths.select(c.relays, host, exitPort = exitPort)
         ensureHopKeys(path.guard.fingerprintHex)
         ensureHopKeys(path.middle.fingerprintHex)
         ensureHopKeys(path.exit.fingerprintHex)
         val circ = circuits.buildCircuit(path, hopKeys)
         paths.confirmGuard(path.guard.fingerprintHex)
-        readyCircuit = circ
+        dir.circuitExists = true
         bootstrap.advance(BootstrapPhase.DONE)
         return circ
     }
@@ -512,19 +634,45 @@ class TorClient(
 
     private suspend fun ensureHopKeys(fp: String) {
         if (fp in hopKeys) return
-        val docs = dir.fetchServerDescriptors(listOf(fp))
-        val doc = docs.entries.firstOrNull { it.key.equals(fp, true) }?.value
-            ?: docs.values.firstOrNull()
-            ?: error("no descriptor for $fp")
+        val c = mutex.withLock { consensus }
+        val rs = c?.relays?.find { it.fingerprintHex.equals(fp, true) }
+        if (rs?.ntorOnionKey != null) {
+            hopKeys[fp] = HopKeys(rs.ntorOnionKey, rs.ed25519Identity)
+            trimHopKeys()
+            return
+        }
+        if (rs?.microdescDigest != null) {
+            val got = dir.fetchMicrodescriptors(listOf(rs.microdescDigest))
+            val hex = rs.microdescDigest.joinToString("") { "%02x".format(it) }
+            val body = got[hex] ?: error("no microdesc for $fp (digest $hex)")
+            val ntor = MicrodescParser.parseOnionKey(body) ?: error("no ntor-onion-key in microdesc $fp")
+            hopKeys[fp] = HopKeys(ntor, DescriptorParser.parseEd25519Identity(body) ?: rs.ed25519Identity)
+            trimHopKeys()
+            return
+        }
+        if (dir.beginDirGet == null && dir.circuitExists) {
+            error("BEGIN_DIR required for hop keys of $fp; refusing cleartext /tor/server/fp")
+        }
+        val expected = if (rs != null && rs.digest.any { it != 0.toByte() }) {
+            mapOf(fp.uppercase() to rs.digest)
+        } else {
+            emptyMap()
+        }
+        val docs = dir.fetchServerDescriptors(listOf(fp), expected)
+        val doc = docs[fp.uppercase()] ?: error("no descriptor for $fp")
         val parsed = DescriptorParser.parse(doc, fp) ?: error("bad descriptor for $fp")
         hopKeys[fp] = HopKeys(parsed.ntorOnionKey, parsed.ed25519Identity)
-        while (hopKeys.size > MAX_HOP_KEYS) {
-            val oldest = hopKeys.keys.firstOrNull() ?: break
-            hopKeys.remove(oldest)
-        }
+        trimHopKeys()
         val family = DescriptorParser.parseFamily(doc)
         if (family.isNotEmpty()) {
             paths.noteFamily(fp, family)
+        }
+    }
+
+    private fun trimHopKeys() {
+        while (hopKeys.size > MAX_HOP_KEYS) {
+            val oldest = hopKeys.keys.firstOrNull() ?: break
+            hopKeys.remove(oldest)
         }
     }
 
@@ -541,6 +689,7 @@ class TorClient(
         readyCircuit = null
         isolatedCircuits.values.forEach { it.close() }
         isolatedCircuits.clear()
+        inFlightBuilds.clear()
         paths.clearRecentHops()
     }
 
@@ -591,6 +740,7 @@ class TorClient(
     companion object {
         const val MAX_HOP_KEYS = 512
         const val MAX_ISOLATED_CIRCUITS = 128
+        private const val DEFAULT_ISOLATION = ""
 
         fun buildAuthorities(config: TorConfig): List<org.kotlintor.dir.DirectoryAuthority> {
             if (config.dirAuthorities.isNotEmpty()) return config.dirAuthorities

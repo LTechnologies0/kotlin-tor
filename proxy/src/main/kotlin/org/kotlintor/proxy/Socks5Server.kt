@@ -21,8 +21,6 @@ import org.kotlintor.net.Socks5Reply
 import org.kotlintor.net.StreamRelay
 import org.kotlintor.net.StreamShaper
 import org.kotlintor.net.negotiateSocks5
-import org.kotlintor.net.socks5BindAccept
-import org.kotlintor.net.socks5UdpAssociateRelay
 import org.kotlintor.net.socks5UdpAssociateViaTor
 import org.kotlintor.net.writeSocks5Failure
 import org.kotlintor.net.writeSocks5Success
@@ -176,25 +174,37 @@ class Socks5Server(
                     }
                 }
                 is Socks5Outcome.Bind -> {
-                    val peer = socks5BindAccept(local) ?: run {
+                    // BIND is not a Tor stream command. Local bind, if ever used, is loopback-only.
+                    if (udpTorGateway == null) {
+                        writeSocks5Failure(local, Socks5Reply.CommandNotSupported)
                         local.close()
                         return
                     }
-                    StreamRelay.splice(local, SocketBytePipe(peer))
+                    writeSocks5Failure(local, Socks5Reply.CommandNotSupported)
+                    local.close()
                 }
                 is Socks5Outcome.UdpAssociate -> {
                     val gw = udpTorGateway
-                    if (gw != null) {
-                        val tor = dialer.connect(
-                            host = gw.first,
-                            port = gw.second,
-                            isolationKey = outcome.isolationKey ?: "udp-assoc",
-                            clientAddr = outcome.clientAddr,
-                        )
-                        socks5UdpAssociateViaTor(local, outcome.clientHint, tor)
-                    } else {
-                        socks5UdpAssociateRelay(local, outcome.clientHint)
+                    if (gw == null) {
+                        writeSocks5Failure(local, Socks5Reply.CommandNotSupported)
+                        local.close()
+                        return
                     }
+                    val bindHost = gw.first
+                    val loopback = bindHost == "127.0.0.1" || bindHost == "::1" ||
+                        bindHost == "localhost"
+                    if (!loopback) {
+                        writeSocks5Failure(local, Socks5Reply.CommandNotSupported)
+                        local.close()
+                        return
+                    }
+                    val tor = dialer.connect(
+                        host = gw.first,
+                        port = gw.second,
+                        isolationKey = outcome.isolationKey ?: "udp-assoc",
+                        clientAddr = outcome.clientAddr,
+                    )
+                    socks5UdpAssociateViaTor(local, outcome.clientHint, tor)
                     local.close()
                 }
             }

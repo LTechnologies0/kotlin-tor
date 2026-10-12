@@ -4,12 +4,14 @@ package org.kotlintor.dir
  * Multi-authority signature quorum (C Tor majority among known authorities).
  *
  * A consensus (or detached-signatures document) is acceptable when at least
- * `ceil(nAuthorities/2)` distinct identity fingerprints have valid signatures.
+ * `nAuthorities/2 + 1` (strictly more than half) distinct identity fingerprints
+ * have valid signatures.
  */
 object DirAuthQuorum {
     fun requiredSignatures(nAuthorities: Int): Int {
         require(nAuthorities > 0)
-        return (nAuthorities + 1) / 2
+        // C Tor `n_authorities/2 + 1` — strictly more than half.
+        return nAuthorities / 2 + 1
     }
 
     fun hasQuorum(

@@ -207,7 +207,8 @@ data class RelayCell(
 
         fun parse(payload: ByteArray): RelayCell {
             require(payload.size >= 11)
-            val cmd = RelayCommand.fromId(payload[0].toInt() and 0xff)
+            val cmd = RelayCommand.fromIdOrNull(payload[0].toInt() and 0xff)
+                ?: error("unknown relay command ${payload[0].toInt() and 0xff}")
             val recognized = readU16be(payload, 1)
             val streamId = readU16be(payload, 3)
             val digest = payload.copyOfRange(5, 9)

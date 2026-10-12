@@ -40,6 +40,14 @@ class NetCodecTest {
     }
 
     @Test
+    fun `socks5 UDP ASSOCIATE command-not-supported is 0x07`() {
+        assertEquals(0x07, Socks5Reply.CommandNotSupported.code)
+        val bytes = Socks5Codec.encodeReply(Socks5Codec.Reply(Socks5Reply.CommandNotSupported))
+        assertEquals(0x05, bytes[0].toInt() and 0xff)
+        assertEquals(0x07, bytes[1].toInt() and 0xff)
+    }
+
+    @Test
     fun `socks4a domain request`() {
         val domain = "onion.test"
         val user = "alice"

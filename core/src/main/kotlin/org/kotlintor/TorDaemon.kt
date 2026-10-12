@@ -162,6 +162,15 @@ class TorDaemon(
         if (config.cookieAuthentication) {
             val cookie = org.kotlintor.util.SecureRandomSource.nextBytes(32)
             Files.write(controlCookiePath, cookie)
+            runCatching {
+                Files.setPosixFilePermissions(
+                    controlCookiePath,
+                    setOf(
+                        java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                        java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                    ),
+                )
+            }
         }
         if (config.disableNetwork) {
             org.kotlintor.status.NetStatus.options = org.kotlintor.status.NetStatus.Options(

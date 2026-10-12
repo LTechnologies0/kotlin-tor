@@ -48,6 +48,7 @@ object NtorV3 {
     ) {
         init {
             require(id.size == ID_LEN && onionKey.size == PUB_KEY_LEN)
+            require(onionKey.any { it != 0.toByte() }) { "ntor-v3 onion key is all-zero" }
         }
     }
 
@@ -102,6 +103,7 @@ object NtorV3 {
     ): Result {
         require(serverHandshake.size >= PUB_KEY_LEN + DIGEST_LEN) { "ntor-v3 CREATED2 too short" }
         val y = serverHandshake.copyOfRange(0, PUB_KEY_LEN)
+        require(y.any { it != 0.toByte() }) { "ntor-v3 server X25519 is all-zero" }
         val auth = serverHandshake.copyOfRange(PUB_KEY_LEN, PUB_KEY_LEN + DIGEST_LEN)
         val encryptedMsg = serverHandshake.copyOfRange(PUB_KEY_LEN + DIGEST_LEN, serverHandshake.size)
 
@@ -132,7 +134,7 @@ object NtorV3 {
                 "Server".toByteArray(),
             ),
         )
-        check(expectedAuth.contentEquals(auth)) { "ntor-v3 AUTH mismatch" }
+        check(org.kotlintor.util.constantTimeEquals(expectedAuth, auth)) { "ntor-v3 AUTH mismatch" }
 
         val raw = kdf(T_FINAL, ntorKeySeed, ENC_KEY_LEN + keystreamLen)
         val encKey = raw.copyOfRange(0, ENC_KEY_LEN)

@@ -79,5 +79,7 @@ enum class RelayCommand(val id: Int) {
         private val byId = entries.associateBy { it.id }
         fun fromId(id: Int): RelayCommand =
             byId[id] ?: error("unknown relay command $id")
+
+        fun fromIdOrNull(id: Int): RelayCommand? = byId[id]
     }
 }

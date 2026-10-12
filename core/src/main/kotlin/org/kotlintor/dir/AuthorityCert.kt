@@ -162,6 +162,11 @@ object AuthorityCert {
         return Digests.sha1(spki.publicKeyData.bytes)
     }
 
+    /** RSA public key from PKCS#1 RSAPublicKey DER (dir-spec identity/signing keys). */
+    fun rsaPublicKeyFromPkcs1(pkcs1: ByteArray): java.security.PublicKey =
+        KeyFactory.getInstance("RSA").generatePublic(X509EncodedKeySpec(pkcs1ToSpki(pkcs1)))
+
+
     private fun signedRegion(doc: String): String {
         val marker = "\ndir-key-certification"
         val idx = doc.indexOf(marker)

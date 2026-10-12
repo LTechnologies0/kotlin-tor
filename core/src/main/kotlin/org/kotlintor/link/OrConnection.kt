@@ -254,9 +254,13 @@ class OrConnection(
                 CellCommand.CERTS -> {
                     responderCells += CellCodec.encode(cell, circIdLen)
                     peerCertsPayload = cell.payload
-                    val parsed = CertsCell.parse(cell.payload)
-                    peerIdentityFingerprint = parsed.rsaIdentityFingerprint
-                    peerEd25519Identity = parsed.ed25519Identity
+                    val tlsPeer = runCatching {
+                        (socket as? SSLSocket)?.session?.peerCertificates?.firstOrNull()
+                            as? java.security.cert.X509Certificate
+                    }.getOrNull()
+                    val validated = LinkCertsValidator.validate(cell.payload, tlsPeer)
+                    peerIdentityFingerprint = validated.rsaIdentityFingerprint
+                    peerEd25519Identity = validated.ed25519Identity
                     sawCerts = true
                 }
                 CellCommand.AUTH_CHALLENGE -> {

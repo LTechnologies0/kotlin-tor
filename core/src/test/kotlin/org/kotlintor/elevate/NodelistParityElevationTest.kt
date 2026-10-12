@@ -149,13 +149,13 @@ class NodelistParityElevationTest {
             raw = "network-status-version 3\ndirectory-signature sha1 aa bb\n-----BEGIN SIGNATURE-----\nAA==\n-----END SIGNATURE-----\n",
             params = mapOf("Wgg" to 1L, "bwweightscale" to 10000L),
         )
-        assertTrue(NetworkStatus.networkstatusCheckConsensusSignature(cons))
+        assertFalse(NetworkStatus.networkstatusCheckConsensusSignature(cons))
         assertFalse(
             NetworkStatus.networkstatusCheckConsensusSignature(
                 cons.copy(raw = "network-status-version 3\n"),
             ),
         )
-        assertTrue(NetworkStatus.networkstatusCheckDocumentSignature(sig))
+        assertFalse(NetworkStatus.networkstatusCheckDocumentSignature(sig))
         assertTrue(NetworkStatus.networkstatusConsensusCanUseMultipleDirectories())
         NetworkStatus.networkstatusNoteConsensusDownloadStart()
         assertTrue(NetworkStatus.networkstatusConsensusIsAlreadyDownloading())

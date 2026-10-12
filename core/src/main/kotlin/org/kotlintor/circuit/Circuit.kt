@@ -87,6 +87,8 @@ class Circuit(
     @Volatile var unusedSinceMs: Long? = null
         private set
     val openStreamCount: Int get() = streams.size
+    @Volatile var dead: Boolean = false
+        private set
 
     /** Half-closed streams (C Tor `half_edge_t`) after local END. */
     val halfEdges = HalfEdgeSet()
@@ -135,6 +137,7 @@ class Circuit(
                                 "circuit DESTROY reason=$reason (${destroyReasonName(reason)})",
                             )
                             System.err.println(err.message)
+                            dead = true
                             created2.close(err)
                             circuitRelay.close(err)
                             break
@@ -195,6 +198,7 @@ class Circuit(
                     }
                 }
             } catch (_: Exception) {
+                dead = true
                 streams.values.forEach { it.close() }
             }
         }
@@ -387,7 +391,11 @@ class Circuit(
             }
             error("unreachable")
         }
+        if (extended.data.size < 2) error("EXTENDED2 payload too short")
         val hlen = ((extended.data[0].toInt() and 0xff) shl 8) or (extended.data[1].toInt() and 0xff)
+        if (hlen < 0 || 2 + hlen > extended.data.size) {
+            error("EXTENDED2 hlen=$hlen exceeds payload ${extended.data.size}")
+        }
         return extended.data.copyOfRange(2, 2 + hlen)
     }
 
@@ -644,6 +652,7 @@ class Circuit(
     }
 
     internal suspend fun sendRelay(cell: RelayCell, early: Boolean = false) {
+        check(!dead) { "circuit $id is dead" }
         val cellCmd = if (early) CellCommand.RELAY_EARLY else CellCommand.RELAY
         val payload = layers.encryptRelay(cell, cellCmd.id)
         conn.send(Cell(id, cellCmd, payload))
@@ -714,10 +723,23 @@ class Circuit(
     }
 
     fun close() {
-        conn.unregisterCircuit(id)
+        dead = true
+        if (conn.isOpen) {
+            scope.launch {
+                runCatching {
+                    val payload = ByteArray(Cell.FIXED_PAYLOAD_LEN)
+                    payload[0] = org.kotlintor.cell.Reasons.CIRC_FINISHED.toByte()
+                    conn.send(Cell(id, CellCommand.DESTROY, payload))
+                }
+                conn.unregisterCircuit(id)
+            }
+        } else {
+            conn.unregisterCircuit(id)
+        }
         streams.values.forEach { it.close() }
         streams.clear()
         unusedSinceMs = System.currentTimeMillis()
+        CircuitList.remove(id)
     }
 }
 
@@ -811,6 +833,45 @@ class CircuitManager(
         connections.values.forEach { it.applyConsensusParams(params) }
     }
 
+    private suspend fun orConnection(key: String, relay: RouterStatus): OrConnection {
+        val existing = connections[key]
+        if (existing != null && existing.isOpen) return existing
+        if (existing != null) {
+            existing.close()
+            connections.remove(key)
+        }
+        val dial = firstHopDialer
+        val conn = OrConnection(
+            relay.ip,
+            relay.orPort,
+            scope,
+            dialer = if (dial != null) {
+                { dial(relay.ip, relay.orPort) }
+            } else {
+                null
+            },
+            bindLocalHost = outboundBindOr,
+            constrainedSockSize = constrainedSockSize,
+            tcpProxyHost = tcpProxyHost,
+            tcpProxyPort = tcpProxyPort,
+            tcpProxyProtocol = tcpProxyProtocol,
+        ).also {
+            it.writeBudget.type = org.kotlintor.link.ChannelScheduler.select(schedulerPreference)
+            it.channelPadding.enabled = connectionPaddingEnabled
+            it.connect(expectedIdentityHex = relay.fingerprintHex)
+            if (lastConsensusParams.isNotEmpty()) it.applyConsensusParams(lastConsensusParams)
+            if (reducedChannelPadding) {
+                it.channelPadding.params =
+                    org.kotlintor.link.ChannelPaddingParams.fromConsensus(
+                        lastConsensusParams.mapValues { e -> e.value.toInt() },
+                        reduced = true,
+                    )
+            }
+        }
+        connections[key] = conn
+        return conn
+    }
+
     private fun effectiveTimeoutMs(): Long {
         if (!learnCircuitBuildTimeout) return circuitBuildTimeoutMs
         val learned = circuitBuildTimeout.timeoutMs()
@@ -847,36 +908,7 @@ class CircuitManager(
         val started = System.currentTimeMillis()
 
         val key = "${path.guard.ip}:${path.guard.orPort}"
-        val conn = connections.getOrPut(key) {
-            val dial = firstHopDialer
-            OrConnection(
-                path.guard.ip,
-                path.guard.orPort,
-                scope,
-                dialer = if (dial != null) {
-                    { dial(path.guard.ip, path.guard.orPort) }
-                } else {
-                    null
-                },
-                bindLocalHost = outboundBindOr,
-                constrainedSockSize = constrainedSockSize,
-                tcpProxyHost = tcpProxyHost,
-                tcpProxyPort = tcpProxyPort,
-                tcpProxyProtocol = tcpProxyProtocol,
-            ).also {
-                it.writeBudget.type = org.kotlintor.link.ChannelScheduler.select(schedulerPreference)
-                it.channelPadding.enabled = connectionPaddingEnabled
-                it.connect(expectedIdentityHex = path.guard.fingerprintHex)
-                if (lastConsensusParams.isNotEmpty()) it.applyConsensusParams(lastConsensusParams)
-                if (reducedChannelPadding) {
-                    it.channelPadding.params =
-                        org.kotlintor.link.ChannelPaddingParams.fromConsensus(
-                            lastConsensusParams.mapValues { e -> e.value.toInt() },
-                            reduced = true,
-                        )
-                }
-            }
-        }
+        val conn = orConnection(key, path.guard)
         val circId = OrConnection.newCircId()
         pathBias.markBuildAttempted(circId, guardFp)
         RepHist.noteCreate(guardFp)
@@ -919,7 +951,15 @@ class CircuitManager(
             pathBias.forgetCircuit(circId)
             RepHist.noteFailure(guardFp)
             CircuitList.remove(circId)
+            if (conn.isOpen) {
+                runCatching {
+                    val payload = ByteArray(org.kotlintor.cell.Cell.FIXED_PAYLOAD_LEN)
+                    payload[0] = org.kotlintor.cell.Reasons.CIRC_INTERNAL.toByte()
+                    conn.send(org.kotlintor.cell.Cell(circId, org.kotlintor.cell.CellCommand.DESTROY, payload))
+                }
+            }
             conn.unregisterCircuit(circId)
+            if (!conn.isOpen) connections.remove(key)
             throw e
         }
     }
@@ -932,22 +972,7 @@ class CircuitManager(
         useCreateOnehop: Boolean = true,
     ): Circuit {
         val key = "${relay.ip}:${relay.orPort}"
-        val conn = connections.getOrPut(key) {
-            OrConnection(
-                relay.ip,
-                relay.orPort,
-                scope,
-                bindLocalHost = outboundBindOr,
-                constrainedSockSize = constrainedSockSize,
-                tcpProxyHost = tcpProxyHost,
-                tcpProxyPort = tcpProxyPort,
-                tcpProxyProtocol = tcpProxyProtocol,
-            ).also {
-                it.writeBudget.type = org.kotlintor.link.ChannelScheduler.select(schedulerPreference)
-                it.connect(expectedIdentityHex = relay.fingerprintHex)
-                if (lastConsensusParams.isNotEmpty()) it.applyConsensusParams(lastConsensusParams)
-            }
-        }
+        val conn = orConnection(key, relay)
         val circId = OrConnection.newCircId()
         onCircEvent("CIRC $circId LAUNCHED PURPOSE=DIR_FETCH")
         val inbound = conn.registerCircuit(circId)

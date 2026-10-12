@@ -224,17 +224,7 @@ object OutboundBind {
  * direct IP exits work under TUN (onionmasq-class NI).
  */
 object SafeSocksPolicy {
-    fun isIpLiteral(host: String): Boolean {
-        val h = host.trim().removePrefix("[").removeSuffix("]")
-        if (h.matches(Regex("""^\d{1,3}(\.\d{1,3}){3}$"""))) return true
-        if (':' in h) {
-            return runCatching {
-                val a = InetAddress.getByName(h)
-                a is java.net.Inet6Address
-            }.getOrDefault(false)
-        }
-        return false
-    }
+    fun isIpLiteral(host: String): Boolean = PrivateAddresses.isIpLiteral(host)
 
     fun allows(host: String, safeSocks: Boolean, allowIpLiterals: Boolean = false): Boolean {
         if (!safeSocks) return true

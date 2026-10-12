@@ -85,7 +85,12 @@ class DnsPortServer(
 
     private suspend fun handleQuery(ds: DatagramSocket, raw: ByteArray, from: InetAddress, port: Int) {
         try {
-            val qname = parseQueryName(raw) ?: return
+            if (raw.size < 12) return
+            // Ignore responses (QR=1) — only answer queries.
+            if ((raw[2].toInt() and 0x80) != 0) return
+            val parsed = parseQuery(raw) ?: return
+            val qname = parsed.first
+            val qtype = parsed.second
             val outcome = runCatching {
                 val addrs = dialer.resolve(qname)
                 true to addrs
@@ -93,8 +98,8 @@ class DnsPortServer(
             val (ok, addrs) = outcome
             val resp = when {
                 !ok && dnssecEnabled -> buildServfail(raw)
-                !ok -> buildResponse(raw, emptyList(), authenticated = false)
-                else -> buildResponse(raw, addrs, authenticated = dnssecEnabled && addrs.isNotEmpty())
+                !ok || addrs.isEmpty() -> buildNxdomain(raw)
+                else -> buildResponse(raw, addrs, qtype, authenticated = dnssecEnabled)
             }
             ds.send(DatagramPacket(resp, resp.size, from, port))
         } catch (_: Exception) {
@@ -107,7 +112,8 @@ class DnsPortServer(
         }
     }
 
-    private fun parseQueryName(raw: ByteArray): String? {
+    /** @return qname to QTYPE, or null */
+    private fun parseQuery(raw: ByteArray): Pair<String, Int>? {
         if (raw.size < 12) return null
         var i = 12
         val labels = mutableListOf<String>()
@@ -120,7 +126,12 @@ class DnsPortServer(
             labels += raw.copyOfRange(i, i + len).toString(Charsets.US_ASCII)
             i += len
         }
-        return labels.joinToString(".").ifEmpty { null }
+        if (i >= raw.size) return null
+        i++ // skip 0
+        if (i + 4 > raw.size) return null
+        val qtype = ((raw[i].toInt() and 0xff) shl 8) or (raw[i + 1].toInt() and 0xff)
+        val qname = labels.joinToString(".").ifEmpty { return null }
+        return qname to qtype
     }
 
     private fun buildServfail(query: ByteArray): ByteArray {
@@ -151,45 +162,89 @@ class DnsPortServer(
         return out.array().copyOf(out.position())
     }
 
+    private fun buildNxdomain(query: ByteArray): ByteArray {
+        val out = ByteBuffer.allocate(512)
+        if (query.size >= 12) {
+            out.put(query, 0, 2)
+            val flagsHi = ((query[2].toInt() and 0xff) or 0x80)
+            val flagsLo = (query[3].toInt() and 0xff and 0xf0) or 0x03 // NXDOMAIN
+            out.put(flagsHi.toByte())
+            out.put(flagsLo.toByte())
+            out.putShort(1)
+            out.putShort(0)
+            out.putShort(0)
+            out.putShort(0)
+            copyQuestion(query, out)
+        }
+        return out.array().copyOf(out.position())
+    }
+
     private fun buildResponse(
         query: ByteArray,
         addrs: List<String>,
+        qtype: Int,
         authenticated: Boolean,
     ): ByteArray {
         val out = ByteBuffer.allocate(512)
         if (query.size >= 12) {
             out.put(query, 0, 2)
             out.put(((query[2].toInt() and 0xff) or 0x80).toByte())
-            // flags lo: RA=0, AD bit (0x20) when we locally validated
             var flagsLo = 0x00
             if (authenticated) flagsLo = flagsLo or 0x20
             out.put(flagsLo.toByte())
             out.putShort(1)
-            val an = addrs.count { it.contains('.') && !it.contains(':') }.coerceAtMost(8)
-            out.putShort(an.toShort())
+            val wanted = when (qtype) {
+                1 -> addrs.filter { it.contains('.') && !it.contains(':') }
+                28 -> addrs.filter { it.contains(':') }
+                else -> emptyList()
+            }.take(8)
+            out.putShort(wanted.size.toShort())
             out.putShort(0); out.putShort(0)
-            var i = 12
-            while (i < query.size && query[i].toInt() != 0) {
-                val len = query[i].toInt() and 0xff
-                out.put(query, i, 1 + len)
-                i += 1 + len
-            }
-            if (i < query.size) {
-                out.put(0)
-                i++
-                if (i + 4 <= query.size) out.put(query, i, 4)
-            }
-            for (a in addrs) {
-                val parts = a.split('.')
-                if (parts.size != 4) continue
-                out.put(0xc0.toByte()); out.put(0x0c)
-                out.putShort(1)
-                out.putShort(1)
-                out.putInt(60)
-                out.putShort(4)
-                for (p in parts) out.put(p.toInt().toByte())
+            copyQuestion(query, out)
+            var written = 0
+            for (a in wanted) {
+                if (written >= 8) break
+                when (qtype) {
+                    1 -> {
+                        val parts = a.split('.')
+                        if (parts.size != 4) continue
+                        out.put(0xc0.toByte()); out.put(0x0c)
+                        out.putShort(1)
+                        out.putShort(1)
+                        out.putInt(60)
+                        out.putShort(4)
+                        for (p in parts) out.put(p.toInt().toByte())
+                        written++
+                    }
+                    28 -> {
+                        val bytes = runCatching { InetAddress.getByName(a).address }.getOrNull()
+                            ?: continue
+                        if (bytes.size != 16) continue
+                        out.put(0xc0.toByte()); out.put(0x0c)
+                        out.putShort(28)
+                        out.putShort(1)
+                        out.putInt(60)
+                        out.putShort(16)
+                        out.put(bytes)
+                        written++
+                    }
+                }
             }
         }
         return out.array().copyOf(out.position())
+    }
+
+    private fun copyQuestion(query: ByteArray, out: ByteBuffer) {
+        var i = 12
+        while (i < query.size && query[i].toInt() != 0) {
+            val len = query[i].toInt() and 0xff
+            out.put(query, i, 1 + len)
+            i += 1 + len
+        }
+        if (i < query.size) {
+            out.put(0)
+            i++
+            if (i + 4 <= query.size) out.put(query, i, 4)
+        }
     }
 }

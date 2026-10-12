@@ -10,8 +10,35 @@ import java.net.InetAddress
  * Used by ExtendAllowPrivateAddresses / DirAllowPrivateAddresses / ClientRejectInternal.
  */
 object PrivateAddresses {
-    fun isPrivate(host: String): Boolean =
-        runCatching { isPrivate(InetAddress.getByName(host)) }.getOrDefault(true)
+    /**
+     * True when [host] is an IPv4/IPv6 **literal** (no DNS). Hostnames return false
+     * so ClientRejectInternalAddresses cannot leak via [InetAddress.getByName].
+     */
+    fun isIpLiteral(host: String): Boolean {
+        val h = host.trim().removeSurrounding("[", "]")
+        if (h.isEmpty()) return false
+        if (h.any { it.isLetter() && it !in 'a'..'f' && it !in 'A'..'F' }) return false
+        return looksIpv4(h) || looksIpv6(h)
+    }
+
+    fun isPrivateLiteral(host: String): Boolean {
+        if (!isIpLiteral(host)) return false
+        val h = host.trim().removeSurrounding("[", "]")
+        return runCatching { isPrivate(InetAddress.getByName(h)) }.getOrDefault(true)
+    }
+
+    /** Only IP literals are classified; hostnames are not private (no DNS). */
+    fun isPrivate(host: String): Boolean = isPrivateLiteral(host)
+
+    private fun looksIpv4(h: String): Boolean {
+        val p = h.split('.')
+        if (p.size != 4) return false
+        return p.all { part ->
+            part.isNotEmpty() && part.all { it.isDigit() } && part.toIntOrNull() in 0..255
+        }
+    }
+
+    private fun looksIpv6(h: String): Boolean = h.contains(':') && h.none { it == ' ' }
 
     fun isPrivate(addr: InetAddress): Boolean {
         if (addr.isAnyLocalAddress || addr.isLoopbackAddress || addr.isLinkLocalAddress) return true
