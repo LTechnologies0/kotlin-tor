@@ -1,6 +1,6 @@
 [versions]
 kotlin = "2.2.10"
-agp = "9.1.1"
+agp = "9.3.1"
 coroutines = "1.10.2"
 bouncycastle = "1.85"
 conscrypt = "2.5.2"
